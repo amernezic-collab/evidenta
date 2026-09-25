@@ -34,6 +34,12 @@
     sun: svg('<circle cx="8" cy="8" r="3"/><path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1"/>'),
     moon: svg('<path d="M13.5 9.5A6 6 0 0 1 6.5 2.5a6 6 0 1 0 7 7z"/>'),
     auto: svg('<circle cx="8" cy="8" r="6"/><path d="M8 2v12" /><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor"/>'),
+    home: svg('<path d="M2.5 7.5L8 3l5.5 4.5V13.5h-4v-3.5h-3v3.5h-4z"/>'),
+    users: svg('<circle cx="6" cy="5.5" r="2.5"/><path d="M1.5 13.5c.5-2.5 2.3-3.8 4.5-3.8s4 1.3 4.5 3.8"/><path d="M10.5 3.2a2.4 2.4 0 0 1 0 4.6M12 9.9c1.4.5 2.2 1.7 2.5 3.6"/>'),
+    chev: svg('<path d="M6 4l4 4-4 4"/>', 12),
+    xls: svg('<rect x="2" y="1.5" width="12" height="13" rx="2"/><path d="M5 5l6 6M11 5l-6 6"/>'),
+    lock: svg('<rect x="3" y="7" width="10" height="7.5" rx="2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>'),
+    chart: svg('<path d="M2 14h12M4 11V8M7 11V4M10 11V6.5M13 11V9"/>'),
     cal: svg('<rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/>')
   };
   let ME = null;
@@ -82,7 +88,8 @@
   /* ---------- drawer ---------- */
   const drawer = $("#drawer");
   function openDrawer(html, onClose) {
-    $("#dbody").innerHTML = html; drawer.hidden = false; drawer._onClose = onClose;
+    $("#dbody").innerHTML = html; drawer.hidden = false; drawer._onClose = onClose; $(".dpanel").classList.remove("wide");
+    if (document.body.classList.contains("ro")) $$("#dbody input, #dbody textarea, #dbody select").forEach(x => { if (x.type !== "search") x.disabled = true; });
     requestAnimationFrame(() => drawer.classList.add("in"));
     setTimeout(() => { const f = $("#dbody input:not([type=checkbox]), #dbody textarea, #dbody select"); f && f.focus(); }, 60);
   }
@@ -97,8 +104,8 @@
   const actions = (del) => `<div class="inline dact"><button class="btn primary" type="submit">Sačuvaj</button><button class="btn" type="button" data-close>Odustani</button>${del ? `<span class="sp"></span><button class="btn ghost danger" type="button" id="del">Obriši</button>` : ""}</div>`;
 
   /* ---------- search ---------- */
-  const TYPES = { client: "Klijent", project: "Projekat", task: "Mjera", risk: "Rizik", finding: "Nalaz", evidence: "Dokaz" };
-  const searchLink = r => r.t === "client" ? "#/clients" : r.t === "project" ? `#/p/${r.id}` : `#/p/${r.project_id}/${{ task: "mjere", risk: "rizici", finding: "audit", evidence: "dokazi" }[r.t]}`;
+  const TYPES = { client: "Klijent", project: "Projekat", task: "Mjera", risk: "Rizik", finding: "Nalaz", evidence: "Dokaz", record: "Registar" };
+  const searchLink = r => r.t === "client" ? `#/c/${r.id}` : r.t === "project" ? `#/p/${r.id}` : r.t === "record" ? `#/p/${r.project_id}/registri/${r.type}` : `#/p/${r.project_id}/${{ task: "mjere", risk: "rizici", finding: "audit", evidence: "dokazi" }[r.t]}`;
   let sT = null;
   function closeSearch() { $("#sres").hidden = true; }
   $("#q").addEventListener("input", e => {
@@ -113,36 +120,79 @@
   $("#sres").addEventListener("click", e => { if (e.target.closest("a")) { closeSearch(); $("#q").value = ""; } });
   document.addEventListener("click", e => { if (!e.target.closest(".search")) closeSearch(); });
 
-  /* ---------- router ---------- */
+  /* ---------- router and navigation ---------- */
+  let NAV = null, CUR = { client: null, project: null, sec: null };
+  const KIND_T = { admin: "Administrator", consultant: "Konsultant", client: "Klijent", pending: "Čeka odobrenje", disabled: "Isključen" };
+  const SECS = [
+    [null, [["pregled", "Pregled"], ["sazetak", "Sažetak za upravu"]]],
+    ["Procjena", [["zahtjevi", null], ["kontrole", null]]],
+    ["Upravljanje", [["rizici", "Rizici"], ["mjere", "Mjere"], ["audit", "Audit i nalazi"], ["preispitivanje", "Preispitivanje uprave"], ["poboljsanja", "Poboljšanja"]]],
+    ["Dokumentacija", [["registri", "Registri"], ["dokazi", "Dokazi"], ["izvjestaji", "Izvještaji"]]],
+    ["Projekat", [["pristup", "Pristup"], ["aktivnost", "Aktivnost"]]]];
+  const secLabel = (k, std) => { const K = ME.catalogs[std].kinds; return k === "zahtjevi" ? K.clause && K.clause.tab : k === "kontrole" ? K.control && K.control.tab : null; };
+  const staff = () => ["admin", "consultant"].includes(ME.user.kind);
+  async function loadNav(force) { if (!NAV || force) { const [cs, ps] = await Promise.all([api("/clients"), api("/projects")]); NAV = { cs, ps }; } return NAV; }
+  function renderNav() {
+    const { cs, ps } = NAV, open = CUR.client;
+    const secs = p => SECS.map(([h, list]) => { const items = list.map(([k, t]) => [k, t || secLabel(k, p.standard)]).filter(x => x[1]);
+      return `${h ? `<span class="sh">${h}</span>` : ""}${items.map(([k, t]) => `<a href="#/p/${p.id}/${k}" class="sn${CUR.sec === k ? " on" : ""}">${esc(t)}</a>`).join("")}`; }).join("");
+    $("#snav").innerHTML = `<a href="#/" class="top1${!CUR.client && !CUR.view ? " on" : ""}">${ICON.home}Pregled</a>
+      ${ME.user.kind === "admin" ? `<a href="#/users" class="top1${CUR.view === "users" ? " on" : ""}">${ICON.users}Korisnici i pristup</a>` : ""}
+      <div class="sgrp"><span>Klijenti i projekti</span>${staff() ? `<a href="#/clients" class="sadd" title="Svi klijenti">Svi</a>` : ""}</div>
+      ${cs.map(c => { const cp = ps.filter(p => p.client_id === c.id), isOpen = open === c.id;
+        return `<div class="cl${isOpen ? " open" : ""}"><a href="#/c/${c.id}" class="cn${CUR.view === "client" && open === c.id ? " on" : ""}">${ICON.chev}<span>${esc(c.name)}</span><small>${cp.length}</small></a>
+        ${isOpen ? cp.map(p => `<div class="pj${CUR.project === p.id ? " open" : ""}"><a href="#/p/${p.id}" class="pn${CUR.project === p.id && CUR.sec === "pregled" ? " on" : ""}"><i style="--p:${p.readiness}"></i><span>${esc(p.name)}</span></a>
+          ${CUR.project === p.id ? `<div class="secs">${secs(p)}</div>` : ""}</div>`).join("") : ""}</div>`; }).join("") || '<p class="faint small pad-s">Još nema klijenata.</p>'}`;
+    const u = ME.user;
+    $("#who").innerHTML = `<b>${esc(u.name || u.email)}</b><small>${esc(KIND_T[u.kind])}</small>`;
+  }
+  function setCrumb(parts) { $("#crumb").innerHTML = parts.map(([t, h], i) => h && i < parts.length - 1 ? `<a href="${h}">${esc(t)}</a>` : `<span>${esc(t)}</span>`).join('<i>›</i>'); document.title = parts.map(p => p[0]).reverse().join(" · ") + " · Evidenta"; }
   async function route() {
-    closeDrawer(); closeSearch();
+    closeDrawer(); closeSearch(); document.body.classList.remove("navopen");
     const h = location.hash.replace(/^#\/?/, "").split("/");
-    const nav = h[0] === "clients" ? "clients" : h[0] === "projects" || h[0] === "p" ? "projects" : "home";
-    $$(".top nav a").forEach(a => a.classList.toggle("on", a.dataset.nav === nav));
     try {
-      if (!ME) { ME = await api("/me"); $("#me").textContent = ME.email; $("#me").title = ME.email; }
+      if (!ME) { ME = await api("/me"); }
+      if (!["admin", "consultant", "client"].includes(ME.user.kind)) return pendingView();
+      await loadNav();
+      CUR = { client: null, project: null, sec: null, view: null };
+      document.body.classList.remove("ro");
+      if (h[0] === "p" && h[1]) { const p = NAV.ps.find(x => x.id === h[1]); CUR = { client: p && p.client_id, project: h[1], sec: h[2] || "pregled" }; }
+      else if (h[0] === "c" && h[1]) CUR = { client: h[1], view: "client" };
+      else if (h[0]) CUR.view = h[0];
+      renderNav();
       app.classList.remove("fade"); void app.offsetWidth; app.classList.add("fade");
+      window.scrollTo(0, 0);
       if (h[0] === "clients") return clientsView();
       if (h[0] === "projects") return projectsView();
-      if (h[0] === "p" && h[1]) return projectView(h[1], h[2] || "pregled");
+      if (h[0] === "users") return usersView();
+      if (h[0] === "c" && h[1]) return clientView(h[1]);
+      if (h[0] === "p" && h[1]) return projectView(h[1], h[2] || "pregled", h[3]);
       return homeView();
     } catch (e) { if (e.message !== "403") app.innerHTML = `<div class="empty"><h2>Nešto nije u redu</h2><p>${esc(e.message)}</p></div>`; }
   }
   window.addEventListener("hashchange", route);
+  $("#burger").addEventListener("click", () => document.body.classList.toggle("navopen"));
+  $("#sback").addEventListener("click", () => document.body.classList.remove("navopen"));
+  function pendingView() {
+    $("#snav").innerHTML = ""; $("#who").innerHTML = `<b>${esc(ME.email)}</b><small>${KIND_T[ME.user.kind]}</small>`; setCrumb([["Evidenta"]]);
+    app.innerHTML = `<div class="card empty" style="max-width:560px;margin:40px auto"><h2>${ME.user.kind === "disabled" ? "Pristup je isključen" : "Čekate odobrenje"}</h2>
+      <p>Prijavljeni ste kao <b>${esc(ME.email)}</b>. ${ME.user.kind === "disabled" ? "Obratite se administratoru." : "Administrator SCE Assurance treba odobriti pristup i dodijeliti vam projekte. Nakon toga osvježite stranicu."}</p></div>`;
+  }
 
   /* ---------- home: dashboard ---------- */
   const pcard = p => `<a class="card pcard" href="#/p/${p.id}">${ring(p.readiness)}<div><div class="faint" style="font-size:12.5px;font-weight:650">${esc(p.client_name)}</div><h3>${esc(p.name)}</h3>
       <div class="meta"><span class="tag">${esc(ME.standards[p.standard] || p.standard)}</span><span class="tag blue">${esc(PHASES[p.phase] || p.phase)}</span>${deadlineTag(p.deadline)}</div>
       <div class="meta"><span>${p.assessed}/${p.applicable} ocijenjeno</span><span>${p.open_tasks} mjera${p.late_tasks ? ` <b class="red">(${p.late_tasks} kasni)</b>` : ""}</span>${p.open_findings ? `<span>${p.open_findings} nalaza</span>` : ""}${p.high_risks ? `<span>${p.high_risks} visokih rizika</span>` : ""}</div></div></a>`;
   async function homeView() {
+    setCrumb([["Pregled"]]);
     const d = await api("/dashboard"), ps = d.projects;
     const avg = ps.length ? Math.round(ps.reduce((a, p) => a + p.readiness, 0) / ps.length) : 0;
     const late = d.tasks.filter(t => daysTo(t.due) < 0).length;
     const soon = ps.filter(p => p.deadline && daysTo(p.deadline) >= 0 && daysTo(p.deadline) <= 60).length;
-    const hour = new Date().getHours(), name = (ME.email.split("@")[0] || "").replace(/^\w/, c => c.toUpperCase());
+    const hour = new Date().getHours(), name = (ME.user.name || ME.email.split("@")[0] || "").split(" ")[0].replace(/^\w/, c => c.toUpperCase());
     const A = { create: "kreirao", update: "izmijenio", assess: "ocijenio", upload: "dodao dokaz", download: "preuzeo", delete: "obrisao", export: "izvezao" };
     const tli = t => `<a class="li" href="#/p/${t.project_id}/mjere"><span class="grow"><b>${esc(t.title)}</b><small>${esc(t.client_name)} · ${esc(t.project_name)}${t.owner ? " · " + esc(t.owner) : ""}</small></span>${dueTag(t.due)}</a>`;
-    app.innerHTML = `<div class="head"><div><h1>${hour < 11 ? "Dobro jutro" : hour < 18 ? "Dobar dan" : "Dobro veče"}, ${esc(name)}.</h1><p>Pregled aktivnih projekata na dan ${fmtDate(new Date().toISOString())}</p></div><button class="btn primary" id="np">+ Novi projekat</button></div>
+    app.innerHTML = `<div class="head"><div><h1>${hour < 11 ? "Dobro jutro" : hour < 18 ? "Dobar dan" : "Dobro veče"}, ${esc(name)}.</h1><p>Pregled aktivnih projekata na dan ${fmtDate(new Date().toISOString())}</p></div>${staff() ? '<button class="btn primary" id="np">+ Novi projekat</button>' : ""}</div>
       <div class="kpis k6">
         <div class="card kpi"><b>${ps.length}</b><span>aktivnih projekata</span></div>
         <div class="card kpi"><b>${avg}%</b><span>prosječna spremnost</span></div>
@@ -152,8 +202,8 @@
         <div class="card kpi"><b>${soon}</b><span>audita u 60 dana</span></div></div>
       <div class="dash">
         <div class="dmain">
-          <div class="head sm"><h2>Aktivni projekti</h2><a href="#/projects">Svi projekti</a></div>
-          ${ps.length ? `<div class="grid pgrid">${ps.map(pcard).join("")}</div>` : `<div class="card empty"><h2>Još nema projekata</h2><p>Dodajte klijenta i prvi projekat za ISO/IEC 27001.</p><p style="margin-top:14px"><button class="btn primary" id="np2">+ Novi projekat</button></p></div>`}
+          <div class="head sm"><h2>Aktivni projekti</h2></div>
+          ${ps.length ? `<div class="grid pgrid">${ps.map(pcard).join("")}</div>` : `<div class="card empty"><h2>Još nema projekata</h2><p>${staff() ? "Dodajte klijenta i prvi projekat." : "Još vam nije dodijeljen nijedan projekat."}</p></div>`}
           <div class="head sm" style="margin-top:22px"><h2>Rokovi u naredne dvije sedmice</h2></div>
           <div class="card flush">${d.tasks.length ? `<div class="list plain">${d.tasks.map(tli).join("")}</div>` : '<p class="muted pad-s">Nema mjera s rokom u naredne dvije sedmice.</p>'}</div>
         </div>
@@ -164,23 +214,16 @@
             return `<div><i></i><p><b>${esc(r.user.split("@")[0])}</b> ${esc(A[r.action] || r.action)} ${esc(x.title || x.name || x.file || r.entity_id || "")}<small>${r.project_name ? esc(r.project_name) + " · " : ""}${ago(r.at)}</small></p></div>`; }).join("") || '<p class="muted small">Još nema aktivnosti.</p>'}</div></div>
         </aside>
       </div>`;
-    $$("#np,#np2").forEach(b => b.addEventListener("click", newProject));
+    $("#np") && $("#np").addEventListener("click", () => newProject());
   }
 
-  async function projectsView() {
-    const ps = await api("/projects");
-    const active = ps.filter(p => p.status === "active"), closed = ps.filter(p => p.status !== "active");
-    app.innerHTML = `<div class="head"><div><h1>Projekti</h1><p>${active.length} aktivnih, ${closed.length} završenih.</p></div><button class="btn primary" id="np">+ Novi projekat</button></div>
-      ${active.length ? `<div class="grid pgrid">${active.map(pcard).join("")}</div>` : `<div class="card empty"><h2>Još nema projekata</h2><p>Dodajte klijenta i prvi projekat za ISO/IEC 27001.</p></div>`}
-      ${closed.length ? `<h2 style="margin:28px 0 12px">Završeni</h2><div class="grid pgrid">${closed.map(pcard).join("")}</div>` : ""}`;
-    $("#np").addEventListener("click", newProject);
-  }
+  async function projectsView() { location.hash = "#/clients"; }
 
-  async function newProject() {
+  async function newProject(clientId) {
     const cs = await api("/clients");
-    openDrawer(`${dhead("Novi projekat")}<p class="muted" style="margin-top:-8px">Katalog zahtjeva se automatski učitava prema standardu.</p>
+    openDrawer(`${dhead("Novi projekat")}<p class="muted" style="margin-top:-8px">Katalog zahtjeva se automatski učitava prema standardu. Vi dobijate pravo uređivanja, a ostale članove dodaje administrator.</p>
       <form class="form" id="pf">
-        <label class="f">Klijent<select id="p-client" required><option value="">Izaberite…</option>${cs.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}<option value="__new">+ Novi klijent…</option></select></label>
+        <label class="f">Klijent<select id="p-client" required><option value="">Izaberite…</option>${cs.map(c => `<option value="${c.id}" ${c.id === clientId ? "selected" : ""}>${esc(c.name)}</option>`).join("")}<option value="__new">+ Novi klijent…</option></select></label>
         <div id="newc" hidden class="form card" style="padding:12px"><label class="f">Naziv klijenta<input id="c-name"></label><div class="two"><label class="f">Država<input id="c-country" placeholder="BiH"></label><label class="f">Djelatnost<input id="c-industry"></label></div></div>
         <label class="f">Naziv projekta<input id="p-name" required placeholder="npr. ISO 27001 certifikacija 2027"></label>
         <label class="f">Standard<select id="p-std">${Object.entries(ME.standards).map(([k, v]) => `<option value="${k}">${esc(v)} · ${ME.catalogs[k].count} stavki</option>`).join("")}</select></label>
@@ -198,19 +241,36 @@
         client = (await api("/clients", { method: "POST", body: { name: val("c-name"), country: val("c-country"), industry: val("c-industry") } })).id;
       }
       const r = await api("/projects", { method: "POST", body: { client_id: client, name: val("p-name"), standard: val("p-std"), deadline: val("p-deadline"), requester: val("p-req"), scope: val("p-scope") } });
-      closeDrawer(); location.hash = "#/p/" + r.id;
+      NAV = null; closeDrawer(); location.hash = "#/p/" + r.id;
     });
   }
 
   /* ---------- clients ---------- */
   async function clientsView() {
-    const cs = await api("/clients");
-    app.innerHTML = `<div class="head"><div><h1>Klijenti</h1><p>${cs.length} klijenata</p></div><button class="btn primary" id="nc">+ Novi klijent</button></div>
-      ${cs.length ? `<table class="tbl"><thead><tr><th>Naziv</th><th class="hide-m">Država</th><th class="hide-m">Djelatnost</th><th>Kontakt</th><th>Projekti</th></tr></thead><tbody>
-      ${cs.map(c => `<tr class="row" data-id="${c.id}"><td><b>${esc(c.name)}</b></td><td class="hide-m">${esc(c.country)}</td><td class="hide-m">${esc(c.industry)}</td><td>${esc(c.contact_name)}<br><small class="faint">${esc(c.contact_email)}</small></td><td>${c.projects}</td></tr>`).join("")}
-      </tbody></table>` : `<div class="card empty"><h2>Još nema klijenata</h2></div>`}`;
-    $("#nc").addEventListener("click", () => clientForm());
-    $$("tr.row").forEach(tr => tr.addEventListener("click", () => clientForm(cs.find(c => c.id === tr.dataset.id))));
+    setCrumb([["Klijenti i projekti"]]);
+    const { cs, ps } = await loadNav(true); renderNav();
+    app.innerHTML = `<div class="head"><div><h1>Klijenti i projekti</h1><p>${cs.length} klijenata, ${ps.length} projekata</p></div>${staff() ? '<div class="inline"><button class="btn" id="nc">+ Novi klijent</button><button class="btn primary" id="np">+ Novi projekat</button></div>' : ""}</div>
+      ${cs.length ? cs.map(c => { const cp = ps.filter(p => p.client_id === c.id);
+        return `<section class="cblock"><div class="head sm"><h2><a href="#/c/${c.id}">${esc(c.name)}</a> <small class="faint">${esc([c.country, c.industry].filter(Boolean).join(" · "))}</small></h2></div>
+        ${cp.length ? `<div class="grid pgrid">${cp.map(pcard).join("")}</div>` : '<p class="muted small">Nema projekata.</p>'}</section>`; }).join("") : `<div class="card empty"><h2>Još nema klijenata</h2></div>`}`;
+    $("#nc") && $("#nc").addEventListener("click", () => clientForm());
+    $("#np") && $("#np").addEventListener("click", () => newProject());
+  }
+  async function clientView(id) {
+    const c = await api("/clients/" + id);
+    setCrumb([["Klijenti", "#/clients"], [c.name]]);
+    const ps = c.projectList;
+    app.innerHTML = `<div class="head"><div><span class="eyebrow">Klijent</span><h1>${esc(c.name)}</h1><p>${esc([c.country, c.industry].filter(Boolean).join(" · ")) || "&nbsp;"}</p></div>
+      ${staff() ? '<div class="inline"><button class="btn" id="ce">Uredi klijenta</button><button class="btn primary" id="np">+ Novi projekat</button></div>' : ""}</div>
+      <div class="cinfo">
+        <div class="card"><h3>Kontakt</h3><p>${esc(c.contact_name || "–")}<br><span class="muted">${esc(c.contact_email || "")}</span></p></div>
+        <div class="card"><h3>Projekti</h3><p><b>${ps.length}</b> <span class="muted">ukupno, ${ps.filter(p => p.status === "active").length} aktivnih</span></p></div>
+        <div class="card"><h3>Prosječna spremnost</h3><p><b>${ps.length ? Math.round(ps.reduce((a, p) => a + p.readiness, 0) / ps.length) : 0}%</b></p></div>
+        ${c.notes ? `<div class="card span2"><h3>Napomene</h3><p class="muted">${esc(c.notes)}</p></div>` : ""}</div>
+      <div class="head sm" style="margin-top:22px"><h2>Projekti</h2></div>
+      ${ps.length ? `<div class="grid pgrid">${ps.map(pcard).join("")}</div>` : '<div class="card empty small">Još nema projekata za ovog klijenta.</div>'}`;
+    $("#ce") && $("#ce").addEventListener("click", () => clientForm(c));
+    $("#np") && $("#np").addEventListener("click", () => newProject(c.id));
   }
   function clientForm(c = {}) {
     openDrawer(`${dhead(c.id ? "Uredi klijenta" : "Novi klijent")}
@@ -222,33 +282,76 @@
       e.preventDefault();
       const b = { name: val("c-name"), country: val("c-country"), industry: val("c-industry"), contact_name: val("c-cn"), contact_email: val("c-ce"), notes: val("c-notes") };
       if (!b.name.trim()) return;
-      await api(c.id ? "/clients/" + c.id : "/clients", { method: c.id ? "PUT" : "POST", body: b });
-      toast("Sačuvano"); closeDrawer(); clientsView();
+      const r = await api(c.id ? "/clients/" + c.id : "/clients", { method: c.id ? "PUT" : "POST", body: b });
+      toast("Sačuvano"); NAV = null; closeDrawer(); location.hash = "#/c/" + (c.id || r.id); if (c.id) route();
+    });
+  }
+
+  /* ---------- users and access (admin) ---------- */
+  async function usersView() {
+    setCrumb([["Korisnici i pristup"]]);
+    const [us, cs] = await Promise.all([api("/users"), api("/clients")]);
+    const pending = us.filter(u => u.kind === "pending");
+    app.innerHTML = `<div class="head"><div><h1>Korisnici i pristup</h1><p>Cloudflare Access određuje ko se može prijaviti. Ovdje određujete šta svaka osoba vidi.</p></div><button class="btn primary" id="nu">+ Dodaj korisnika</button></div>
+      <div class="rolegrid">
+        <div class="card"><b>Administrator</b><p class="muted small">Vidi sve klijente i projekte, upravlja korisnicima i pristupom.</p></div>
+        <div class="card"><b>Konsultant</b><p class="muted small">Tim ili vanjski saradnik. Vidi samo projekte na koje je dodan; može kreirati klijente i projekte.</p></div>
+        <div class="card"><b>Klijent</b><p class="muted small">Osoba iz firme klijenta. Vidi samo projekte svoje firme na koje je dodana, obično samo za pregled i preuzimanje registara.</p></div></div>
+      ${pending.length ? `<div class="card note"><b>${pending.length} ${pending.length === 1 ? "osoba čeka" : "osoba čeka"} odobrenje.</b> Prijavili su se preko Cloudflare Accessa, ali još ne vide ništa.</div>` : ""}
+      <table class="tbl"><thead><tr><th>Korisnik</th><th>Uloga</th><th class="hide-m">Firma</th><th>Projekti</th><th class="hide-m">Zadnja prijava</th></tr></thead><tbody>
+      ${us.map(u => `<tr class="row" data-e="${esc(u.email)}"><td class="ttl"><b>${esc(u.name || u.email)}</b><small>${esc(u.name ? u.email : "")}</small></td><td><span class="role ${u.kind}">${KIND_T[u.kind]}</span></td>
+        <td class="hide-m">${esc(u.kind === "client" ? u.client_name : u.org || "")}</td><td>${u.kind === "admin" ? "svi" : u.projects}</td><td class="hide-m small">${u.last_seen ? ago(u.last_seen) : "nikad"}</td></tr>`).join("")}</tbody></table>
+      <p class="faint small" style="margin-top:12px">Za novu osobu: dodajte njen e-mail u Cloudflare Zero Trust, u Access politiku aplikacije app.evidenta.io, a ovdje joj dodijelite ulogu i projekte.</p>`;
+    $("#nu").addEventListener("click", () => userForm({}, cs));
+    $$("tr.row").forEach(tr => tr.addEventListener("click", () => userForm(us.find(u => u.email === tr.dataset.e), cs)));
+  }
+  async function userForm(u, cs) {
+    const ps = NAV.ps;
+    let mem = [];
+    if (u.email && u.kind !== "admin") mem = (await Promise.all(ps.map(p => api(`/projects/${p.id}/members`).then(ms => { const m = ms.find(x => x.email === u.email); return m ? { ...m, p } : null; })))).filter(Boolean);
+    openDrawer(`${dhead(u.email ? esc(u.name || u.email) : "Novi korisnik", "Korisnik")}
+      <form class="form" id="uf"><label class="f">E-mail<input id="u-e" type="email" value="${esc(u.email)}" ${u.email ? "readonly" : ""} required></label>
+      <div class="two"><label class="f">Ime i prezime<input id="u-n" value="${esc(u.name)}"></label><label class="f">Firma ili organizacija<input id="u-o" value="${esc(u.org)}"></label></div>
+      <div class="two"><label class="f">Uloga<select id="u-k">${["consultant", "client", "admin", "pending", "disabled"].map(k => `<option value="${k}" ${k === (u.kind || "consultant") ? "selected" : ""}>${KIND_T[k]}</option>`).join("")}</select></label>
+      <label class="f" id="u-cw">Klijent (za ulogu Klijent)<select id="u-c"><option value="">–</option>${cs.map(c => `<option value="${c.id}" ${c.id === u.client_id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label></div>
+      ${actions(false)}</form>
+      ${u.email && u.kind !== "admin" ? `<div class="sec"><h3>${ICON.lock} Projekti ove osobe</h3><div class="list">${mem.map(m => `<div class="li"><span class="grow"><b>${esc(m.p.name)}</b><small>${esc(m.p.client_name)}</small></span><span class="tag ${m.access === "edit" ? "blue" : ""}">${m.access === "edit" ? "Uređivanje" : "Pregled"}</span></div>`).join("") || '<p class="muted small">Nije dodana ni na jedan projekat.</p>'}</div>
+        <p class="faint small" style="margin-top:8px">Projekte dodjeljujete u projektu, u sekciji Pristup.</p></div>` : ""}`);
+    const sync = () => { $("#u-cw").style.visibility = val("u-k") === "client" ? "visible" : "hidden"; }; sync(); $("#u-k").addEventListener("change", sync);
+    $("#uf").addEventListener("submit", async e => {
+      e.preventDefault();
+      await api("/users" + (u.email ? "/" + encodeURIComponent(u.email) : ""), { method: u.email ? "PUT" : "POST", body: { email: val("u-e"), name: val("u-n"), org: val("u-o"), kind: val("u-k"), client_id: val("u-c") } });
+      toast("Sačuvano"); closeDrawer(); usersView();
     });
   }
 
   /* ---------- project ---------- */
-  let P = null, ITEMS = [], TASKS = [], EVID = [], RISKS = [], FINDS = [], AUDITS = [];
+  let P = null, ITEMS = [], TASKS = [], EVID = [], RISKS = [], FINDS = [], AUDITS = [], RO = false;
   const CODE = () => Object.fromEntries(ITEMS.map(i => [i.id, i.code]));
   const CAT = () => ME.catalogs[P.standard];
   async function loadProject(id) {
     [P, ITEMS, TASKS, EVID, RISKS, FINDS, AUDITS] = await Promise.all(["", "/items", "/tasks", "/evidence", "/risks", "/findings", "/audits"].map(s => api("/projects/" + id + s)));
+    RO = P.access !== "edit"; document.body.classList.toggle("ro", RO);
   }
-  async function projectView(id, tab) {
+  const SEC_T = { pregled: "Pregled", sazetak: "Sažetak za upravu", rizici: "Registar rizika", mjere: "Mjere", audit: "Audit i nalazi", preispitivanje: "Preispitivanje od strane uprave", poboljsanja: "Poboljšanja", registri: "Registri", dokazi: "Dokazi", izvjestaji: "Izvještaji", pristup: "Pristup projektu", aktivnost: "Aktivnost" };
+  let SUB = null;
+  async function projectView(id, sec, sub) {
     await loadProject(id);
-    const open = TASKS.filter(t => t.status !== "done").length, openF = FINDS.filter(f => f.status !== "closed").length;
     const K = CAT().kinds;
-    if ((tab === "zahtjevi" && !K.clause) || (tab === "kontrole" && !K.control)) tab = "pregled";
-    const tabs = [["pregled", "Pregled"], ...(K.clause ? [["zahtjevi", K.clause.tab]] : []), ...(K.control ? [["kontrole", K.control.tab]] : []), ["rizici", "Rizici", RISKS.length], ["mjere", "Mjere", open], ["dokazi", "Dokazi", EVID.length], ["audit", "Audit i nalazi", openF], ["izvjestaji", "Izvještaji"], ["aktivnost", "Aktivnost"]];
-    app.innerHTML = `<div class="phead"><div><div class="crumb"><a href="#/projects">Projekti</a> / ${esc(P.client_name)}</div><h1>${esc(P.name)}</h1>
-      <div class="facts"><span>${esc(ME.standards[P.standard])}</span><span>Faza: <b>${esc(PHASES[P.phase] || P.phase)}</b></span>${P.deadline ? `<span>Rok: <b>${fmtDate(P.deadline)}</b></span>` : ""}${P.requester ? `<span>Traži: <b>${esc(P.requester)}</b></span>` : ""}${P.lead ? `<span>Voditelj: <b>${esc(P.lead)}</b></span>` : ""}${deadlineTag(P.deadline)}${P.status !== "active" ? '<span class="tag">Završen</span>' : ""}</div></div>
-      <div class="inline"><a class="btn" href="#/p/${P.id}/izvjestaji">${ICON.word} Izvještaji</a><button class="btn" id="pedit">Uredi projekat</button></div></div>
-      <nav class="tabs">${tabs.map(([k, t, n]) => `<a href="#/p/${P.id}/${k}" class="${k === tab ? "on" : ""}">${t}${n ? `<small>${n}</small>` : ""}</a>`).join("")}</nav>
+    if ((sec === "zahtjevi" && !K.clause) || (sec === "kontrole" && !K.control) || !(SEC_T[sec] || sec === "zahtjevi" || sec === "kontrole")) sec = "pregled";
+    SUB = sub || null;
+    const title = sec === "zahtjevi" ? K.clause.tab : sec === "kontrole" ? K.control.tab : SEC_T[sec];
+    setCrumb([[P.client_name, "#/c/" + P.client_id], [P.name, "#/p/" + P.id], ...(sec !== "pregled" ? [[title]] : [])]);
+    app.innerHTML = `<div class="phead"><div><h1>${esc(P.name)}</h1>
+      <div class="facts"><span>${esc(ME.standards[P.standard])}</span><span>Faza: <b>${esc(PHASES[P.phase] || P.phase)}</b></span>${P.deadline ? `<span>Rok: <b>${fmtDate(P.deadline)}</b></span>` : ""}${P.requester ? `<span>Traži: <b>${esc(P.requester)}</b></span>` : ""}${deadlineTag(P.deadline)}${P.status !== "active" ? '<span class="tag">Završen</span>' : ""}${RO ? `<span class="tag">${ICON.lock} Samo pregled</span>` : ""}</div></div>
+      <div class="inline"><a class="btn" href="/api/projects/${P.id}/report/mgmt.docx">${ICON.word} Izvještaj za upravu</a>${RO ? "" : '<button class="btn" id="pedit">Uredi projekat</button>'}</div></div>
+      ${sec !== "pregled" ? `<h2 class="stitle">${esc(title)}</h2>` : ""}
       <section id="tab"></section>`;
-    $("#pedit").addEventListener("click", projectForm);
-    ({ pregled: tabOverview, zahtjevi: () => tabItems("clause"), kontrole: () => tabItems("control"), rizici: tabRisks, mjere: tabTasks, dokazi: tabEvidence, audit: tabAudits, izvjestaji: tabReports, aktivnost: tabAudit }[tab] || tabOverview)();
+    $("#pedit") && $("#pedit").addEventListener("click", projectForm);
+    ({ pregled: tabOverview, sazetak: tabSummary, zahtjevi: () => tabItems("clause"), kontrole: () => tabItems("control"), rizici: tabRisks, mjere: tabTasks, dokazi: tabEvidence, audit: tabAudits,
+      preispitivanje: tabReviews, poboljsanja: tabImprovements, registri: () => SUB ? tabRegister(SUB) : tabRegisters(), izvjestaji: tabReports, pristup: tabAccess, aktivnost: tabAudit }[sec] || tabOverview)();
   }
-  const refresh = () => projectView(P.id, (location.hash.split("/")[3] || "pregled"));
+  const refresh = () => { const h = location.hash.replace(/^#\/?/, "").split("/"); return projectView(P.id, h[2] || "pregled", h[3]); };
 
   function projectForm() {
     openDrawer(`${dhead("Uredi projekat")}
@@ -261,7 +364,7 @@
     $("#pf").addEventListener("submit", async e => {
       e.preventDefault();
       await api("/projects/" + P.id, { method: "PUT", body: { name: val("p-name"), phase: val("p-phase"), status: val("p-status"), deadline: val("p-deadline"), requester: val("p-req"), lead: val("p-lead"), scope: val("p-scope") } });
-      toast("Sačuvano"); closeDrawer(); refresh();
+      toast("Sačuvano"); NAV = null; closeDrawer(); route();
     });
   }
 
@@ -400,8 +503,8 @@
     drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); send([...e.dataTransfer.files]); });
   }
   /* linked task list with quick add (risks and findings) */
-  const linkedTasks = (key, id) => `<div class="sec"><h3>${ICON.task} ${key === "finding_id" ? "Korektivne mjere" : "Mjere tretmana"}</h3><div class="list">${TASKS.filter(t => t[key] === id).map(taskLi).join("") || '<p class="muted small">Nema mjera.</p>'}</div>
-    <div class="inline" style="margin-top:8px"><input id="lt-t" placeholder="Nova mjera"><input id="lt-o" placeholder="Odgovorni" style="flex:0 0 130px"><input id="lt-d" type="date" style="flex:0 0 140px"><button class="btn sm" type="button" id="lt-add">Dodaj</button></div></div>`;
+  const linkedTasks = (key, id, label) => `<div class="sec"><h3>${ICON.task} ${label || (key === "finding_id" ? "Korektivne mjere" : "Mjere tretmana")}</h3><div class="list">${TASKS.filter(t => t[key] === id).map(taskLi).join("") || '<p class="muted small">Nema mjera.</p>'}</div>
+    <div class="inline w" style="margin-top:8px"><input id="lt-t" placeholder="Nova mjera"><input id="lt-o" placeholder="Odgovorni" style="flex:0 0 130px"><input id="lt-d" type="date" style="flex:0 0 140px"><button class="btn sm" type="button" id="lt-add">Dodaj</button></div></div>`;
   function bindLinked(key, id, again) {
     $("#lt-add").addEventListener("click", async () => {
       if (!val("lt-t").trim()) return;
@@ -608,17 +711,202 @@
   /* ---------- reports ---------- */
   function tabReports() {
     const base = `/api/projects/${P.id}`;
+    const XL = { "gap.csv": "items", "soa.csv": "soa", "tasks.csv": "tasks", risks: "risks" };
     const card = (t, d, word, csv, extra = "") => `<div class="card rep"><div class="ric">${ICON.word}</div><div><h3>${t}</h3><p class="muted small">${d}</p>
-      <div class="inline" style="margin-top:12px;flex-wrap:wrap">${word ? `<a class="btn primary sm" href="${base}/report/${word}">${ICON.word} Word</a>` : ""}${csv ? `<a class="btn sm" href="${base}/export/${csv}">${ICON.csv} Excel (CSV)</a>` : ""}${extra}</div></div></div>`;
+      <div class="inline" style="margin-top:12px;flex-wrap:wrap">${word ? `<a class="btn primary sm" href="${base}/report/${word}">${ICON.word} Word</a>` : ""}${csv ? `<a class="btn sm" href="${base}/registers.xlsx?type=${XL[csv]}">${ICON.csv} Excel</a>` : ""}${extra}</div></div></div>`;
     $("#tab").innerHTML = `<p class="muted" style="margin-bottom:14px">Izvještaji se generišu iz trenutnog stanja projekta, s naslovnom stranom, brojevima stranica i oznakom povjerljivosti. Svako preuzimanje se bilježi u aktivnosti.</p>
       <div class="grid repgrid">
+      ${card("Izvještaj za upravu", `Ključni pokazatelji, odluke koje se traže od uprave, spremnost po oblastima s grafikonima, pregled svih stavki, najveći rizici i otvoreni nalazi.`, "mgmt.docx", "")}
       ${card("Izvještaj o gap analizi", `${esc(ME.standards[P.standard])}: sažetak spremnosti, rezultati po oblastima, stavke koje traže pažnju, detaljni pregled i plan mjera. Trenutno ${P.summary.readiness}% spremnosti.`, "gap.docx", "gap.csv")}
       ${CAT().soa ? card("Izjava o primjenjivosti (SoA)", `Svih 93 kontrole Aneksa A s obrazloženjem i statusom, po temama, s poljima za odobrenje.`, "soa.docx", "soa.csv") : ""}
-      ${card("Registar rizika i plan tretmana", `Metodologija, mapa rizika, registar s inherentnim i rezidualnim nivoom, plan tretmana. ${RISKS.length} rizika u registru.`, "risks.docx", "")}
+      ${card("Registar rizika i plan tretmana", `Metodologija, mapa rizika, registar s inherentnim i rezidualnim nivoom, plan tretmana. ${RISKS.length} rizika u registru.`, "risks.docx", "risks")}
       ${card("Plan mjera", `Otvorene i završene mjere s odgovornima i rokovima. ${TASKS.filter(t => t.status !== "done").length} otvorenih.`, "tasks.docx", "tasks.csv")}
       ${card("Izvještaj o auditu", AUDITS.length ? "Sažetak, nalazi po vrsti, detalji svakog nalaza s uzrokom i korektivnom mjerom, potpisi." : "Prvo dodajte audit u kartici Audit i nalazi.", "", "",
         AUDITS.map(a => `<a class="btn sm" href="${base}/report/audit.docx?audit=${a.id}">${ICON.word} ${esc(a.title)}</a>`).join(""))}
+      ${card("Zapisnik s preispitivanja uprave", "Ulazi, izlazi, odluke i mjere uprave, s poljima za potpis. Zapisnici se prave u sekciji Preispitivanje uprave.", "", "", `<a class="btn sm" href="#/p/${P.id}/preispitivanje">Preispitivanja</a>`)}
+      ${card("Svi registri", "Jedna Excel radna sveska: sažetak, status zahtjeva, rizici, mjere, nalazi, auditi, preispitivanja, dokazi i svi registri standarda.", "", "", `<a class="btn primary sm" href="${base}/registers.xlsx?type=all">${ICON.csv} Excel</a><a class="btn sm" href="#/p/${P.id}/registri">Registri</a>`)}
       </div>`;
+  }
+
+  /* ---------- charts (SVG, no libraries) ---------- */
+  const STC = { 3: "var(--s3)", 2: "var(--s2)", 1: "var(--s1)", 0: "var(--s0)", "": "var(--sn)" };
+  function donut(segs, center, sub) {
+    const tot = segs.reduce((a, s) => a + s.v, 0) || 1, r = 52, c = 2 * Math.PI * r; let off = 0;
+    const arcs = segs.filter(s => s.v).map(s => { const len = s.v / tot * c, gap = segs.filter(x => x.v).length > 1 ? 2 : 0;
+      const el = `<circle cx="70" cy="70" r="${r}" fill="none" stroke="${s.c}" stroke-width="16" stroke-dasharray="${Math.max(0, len - gap)} ${c}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"><title>${esc(s.l)}: ${s.v} (${Math.round(s.v / tot * 100)}%)</title></circle>`; off += len; return el; }).join("");
+    return `<div class="donut"><svg viewBox="0 0 140 140" role="img" aria-label="${esc(center)}"><circle cx="70" cy="70" r="${r}" fill="none" stroke="var(--card2)" stroke-width="16"/>${arcs}<text x="70" y="70" text-anchor="middle" class="dv">${esc(center)}</text><text x="70" y="88" text-anchor="middle" class="ds">${esc(sub)}</text></svg>
+      <ul class="lg">${segs.map(s => `<li><i style="background:${s.c}"></i>${esc(s.l)}<b>${s.v}</b></li>`).join("")}</ul></div>`;
+  }
+  const hbars = rows => `<div class="hb">${rows.map(r => `<div class="hbr" title="${esc(r.label)}: ${r.pct}%"><span class="n">${esc(r.code)}</span><span class="l">${esc(r.label)}</span><span class="t"><i style="width:${r.pct}%;background:${r.pct >= 75 ? "var(--s3)" : r.pct >= 40 ? "var(--s2)" : r.pct > 0 ? "var(--s1)" : "var(--sn)"}"></i></span><b>${r.pct}%</b></div>`).join("")}</div>`;
+  function lineChart(h) {
+    if (h.length < 2) return `<p class="muted small">Kretanje spremnosti se bilježi svaki dan kada se projekat otvori. Graf se pojavljuje od drugog dana mjerenja.</p>${h.length ? `<p><b>${h[0].readiness}%</b> <span class="muted small">na dan ${fmtDate(h[0].day)}</span></p>` : ""}`;
+    const W = 560, H = 190, L = 34, B = 24, T = 10, t0 = new Date(h[0].day), t1 = new Date(h[h.length - 1].day), span = Math.max(1, t1 - t0);
+    const x = d => L + (new Date(d) - t0) / span * (W - L - 10), y = v => T + (100 - v) / 100 * (H - T - B);
+    const pts = h.map(p => `${x(p.day).toFixed(1)},${y(p.readiness).toFixed(1)}`).join(" ");
+    return `<svg class="line" viewBox="0 0 ${W} ${H}" role="img" aria-label="Kretanje spremnosti">
+      ${[0, 25, 50, 75, 100].map(v => `<line x1="${L}" x2="${W - 10}" y1="${y(v)}" y2="${y(v)}" class="gl"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" class="ax">${v}</text>`).join("")}
+      <text x="${L}" y="${H - 6}" class="ax">${fmtDate(h[0].day)}</text><text x="${W - 10}" y="${H - 6}" text-anchor="end" class="ax">${fmtDate(h[h.length - 1].day)}</text>
+      <polyline points="${L},${y(0)} ${pts} ${x(h[h.length - 1].day)},${y(0)}" class="area"/><polyline points="${pts}" class="ln"/>
+      ${h.map(p => `<g class="pt"><circle cx="${x(p.day)}" cy="${y(p.readiness)}" r="10" class="hit"/><circle cx="${x(p.day)}" cy="${y(p.readiness)}" r="3.5" class="dot"/><title>${fmtDate(p.day)}: ${p.readiness}% spremnosti, ${p.open_tasks} otvorenih mjera</title></g>`).join("")}</svg>`;
+  }
+  function tiles(kind) {
+    const C = CAT(), groups = C.groups[kind], gp = C.kinds[kind].gp;
+    return `<div class="tiles">${Object.entries(groups).map(([g, name]) => `<div class="trow"><span class="tg">${gp}${g} <small>${esc(name)}</small></span><div class="tset">${ITEMS.filter(i => i.kind === kind && i.group === g).map(i => {
+      const st = stOf(i.status); return `<button type="button" class="tile${i.applicable ? "" : " na"}" data-id="${i.id}" style="--c:${i.applicable ? STC[i.status == null ? "" : i.status] : "var(--card2)"}" title="${esc(i.code)} ${esc(i.title)}: ${i.applicable ? st.t : "Ne primjenjuje se"}">${esc(i.code.replace(/^Čl\. /, ""))}</button>`; }).join("")}</div></div>`).join("")}</div>`;
+  }
+
+  /* ---------- management summary ---------- */
+  async function tabSummary() {
+    const s = P.summary, c = P.counters, K = CAT().kinds, h = await api(`/projects/${P.id}/history`);
+    const app_ = ITEMS.filter(i => i.applicable);
+    const dist = [3, 2, 1, 0, ""].map(v => ({ v: app_.filter(i => (i.status == null ? "" : i.status) === v).length, c: STC[v], l: stOf(v).t }));
+    const prev = h.length > 1 ? h[Math.max(0, h.length - 31)] : null, delta = prev ? s.readiness - prev.readiness : null;
+    const lv = ["critical", "high", "medium", "low"].map(l => ({ l, n: RISKS.filter(r => r.status !== "closed" && LEVEL(r.likelihood * r.impact) === l).length }));
+    const maxLv = Math.max(1, ...lv.map(x => x.n));
+    const openT = TASKS.filter(t => t.status !== "done"), late = openT.filter(t => t.due && daysTo(t.due) < 0), done = TASKS.length - openT.length;
+    const fk = Object.keys(FKIND).map(k => ({ k, n: FINDS.filter(f => f.kind === k && f.status !== "closed").length }));
+    $("#tab").innerHTML = `<p class="muted" style="margin:-4px 0 16px">Pregled za upravu klijenta: gdje je sistem danas, šta se promijenilo i gdje je potrebna odluka. Isti sadržaj je u Word izvještaju za upravu.</p>
+      <div class="kpis k6">
+        <div class="card kpi"><b>${s.readiness}%</b><span>spremnost${delta != null ? ` · <span class="${delta >= 0 ? "up" : "down"}">${delta >= 0 ? "+" : ""}${delta} p.p.</span>` : ""}</span></div>
+        <div class="card kpi"><b>${s.assessed}/${s.applicable}</b><span>stavki ocijenjeno</span></div>
+        <div class="card kpi ${late.length ? "warn" : ""}"><b>${late.length}</b><span>mjera kasni od ${openT.length} otvorenih</span></div>
+        <div class="card kpi ${c.major_findings ? "warn" : ""}"><b>${c.open_findings}</b><span>otvorenih nalaza, ${c.major_findings} glavnih</span></div>
+        <div class="card kpi"><b>${c.high_risks}</b><span>visokih i kritičnih rizika</span></div>
+        <div class="card kpi"><b>${P.deadline ? daysTo(P.deadline) : "–"}</b><span>dana do audita</span></div></div>
+      <div class="sgrid">
+        <div class="card"><h3>Status svih stavki</h3>${donut(dist, s.readiness + "%", "spremnost")}</div>
+        <div class="card span2"><h3>Kretanje spremnosti</h3>${lineChart(h)}</div>
+        ${Object.keys(K).map(k => `<div class="card span${Object.keys(K).length === 1 ? 3 : "15"}"><h3>${esc(K[k].title)}</h3>${hbars(s.groups.filter(g => g.kind === k).map(g => ({ code: K[k].gp.replace("Čl. ", "") + g.group, label: g.name, pct: g.pct })))}</div>`).join("")}
+        <div class="card span3"><div class="head sm"><h3>Sve stavke na jednom mjestu</h3><div class="lg inline-lg">${[3, 2, 1, 0, ""].map(v => `<span><i style="background:${STC[v]}"></i>${stOf(v).t}</span>`).join("")}<span><i style="background:var(--card2);border:1px solid var(--line2)"></i>Ne primjenjuje se</span></div></div>
+          ${Object.keys(K).map(k => `<h4 class="th4">${esc(K[k].title)}</h4>${tiles(k)}`).join("")}</div>
+        <div class="card"><h3>Aktivni rizici po nivou</h3><div class="vb">${lv.map(x => `<div title="${LEVEL_T[x.l]}: ${x.n}"><b>${x.n}</b><span class="bar"><i class="${x.l}" style="height:${x.n / maxLv * 100}%"></i></span><small>${LEVEL_T[x.l]}</small></div>`).join("")}</div></div>
+        <div class="card"><h3>Mjere</h3>${donut([{ v: done, c: "var(--s3)", l: "Završeno" }, { v: openT.length - late.length, c: "var(--s2)", l: "Otvoreno u roku" }, { v: late.length, c: "var(--s0)", l: "Kasni" }], String(TASKS.length), "mjera")}</div>
+        <div class="card"><h3>Otvoreni nalazi</h3><div class="hb">${fk.map(x => `<div class="hbr"><span class="l">${fkTag(x.k)}</span><span class="t"><i style="width:${x.n / Math.max(1, ...fk.map(y => y.n)) * 100}%;background:var(--ink2)"></i></span><b>${x.n}</b></div>`).join("")}</div></div>
+      </div>
+      <div class="inline" style="margin-top:16px;flex-wrap:wrap"><a class="btn primary" href="/api/projects/${P.id}/report/mgmt.docx">${ICON.word} Izvještaj za upravu (Word)</a><a class="btn" href="/api/projects/${P.id}/registers.xlsx?type=all">${ICON.csv} Svi registri (Excel)</a></div>`;
+    $$("#tab .tile").forEach(t => t.addEventListener("click", () => itemDrawer(t.dataset.id)));
+  }
+
+  /* ---------- registers ---------- */
+  const REG = () => ME.registers;
+  const recRef = (type, ref) => `${REG()[type].prefix}-${String(ref).padStart(3, "0")}`;
+  async function tabRegisters() {
+    const { counts, recommended } = await api(`/projects/${P.id}/records`);
+    const std = P.standard, base = `/api/projects/${P.id}/registers.xlsx?type=`;
+    const builtin = [["items", "Status zahtjeva i kontrola", "Svi zahtjevi sa statusom, nalazom i odgovornim", ITEMS.length, CAT().kinds.clause ? "zahtjevi" : "kontrole"],
+      ...(CAT().soa ? [["soa", "Izjava o primjenjivosti (SoA)", "Kontrole Aneksa A s obrazloženjem", ITEMS.filter(i => i.kind === "control").length, "kontrole"]] : []),
+      ["risks", "Registar rizika", "Procjena i tretman rizika", RISKS.length, "rizici"], ["tasks", "Plan mjera", "Sve mjere s rokovima i odgovornima", TASKS.length, "mjere"],
+      ["findings", "Nalazi i korektivne mjere", "Nesukladnosti, zapažanja, korektivne mjere", FINDS.length, "audit"], ["audits", "Program audita", "Planirani i održani auditi", AUDITS.length, "audit"],
+      ["reviews", "Preispitivanja uprave", "Zapisnici i odluke uprave", null, "preispitivanje"], ["evidence", "Registar dokaza", "Priloženi dokumenti", EVID.length, "dokazi"]];
+    const card = (t, d, n, href, x, ref, open) => `<div class="card reg"><div class="rtop"><h3>${esc(t)}</h3>${n != null ? `<span class="cnt2">${n}</span>` : ""}</div><p class="muted small">${esc(d)}</p>${ref ? `<p class="faint small">Zahtjev: ${esc(ref)}</p>` : ""}${open ? `<p class="small red">${open} otvoreno</p>` : ""}
+      <div class="inline" style="margin-top:auto;padding-top:10px"><a class="btn sm" href="${href}">Otvori</a><a class="btn sm" href="${base}${x}">${ICON.csv} Excel</a></div></div>`;
+    const regCard = k => { const r = REG()[k], c = counts[k] || { n: 0, open: 0 }; return card(r.name, `${r.fields.slice(0, 4).map(f => f.l).join(", ")}…`, c.n, `#/p/${P.id}/registri/${k}`, "r:" + k, r.ref[std], c.open); };
+    const others = Object.keys(REG()).filter(k => !recommended.includes(k));
+    $("#tab").innerHTML = `<div class="head sm"><p class="muted" style="max-width:52rem">Registri koje standard traži ili koje auditor očekuje. Svaki se može preuzeti u Excelu, a svi zajedno u jednoj radnoj svesci s listom za svaki registar.</p><a class="btn primary" href="${base}all">${ICON.csv} Svi registri (Excel)</a></div>
+      <h3 class="gh">Registri za ${esc(ME.standards[std])}</h3><div class="grid rgrid3">${recommended.map(regCard).join("")}</div>
+      <h3 class="gh">Evidencije projekta</h3><div class="grid rgrid3">${builtin.map(([x, t, d, n, s]) => card(t, d, n, `#/p/${P.id}/${s}`, x)).join("")}</div>
+      ${others.length ? `<details class="more"><summary>Dodatni registri (${others.length})</summary><div class="grid rgrid3">${others.map(regCard).join("")}</div></details>` : ""}`;
+  }
+  async function tabRegister(type, opts = {}) {
+    const def = REG()[type]; if (!def) return tabRegisters();
+    const rows = await api(`/projects/${P.id}/records?type=${type}`), cols = def.fields.filter(f => f.list);
+    $("#tab").innerHTML = `${opts.noBack ? "" : `<a class="back" href="#/p/${P.id}/registri">‹ Svi registri</a>`}
+      <div class="head sm"><div><h3 style="font-size:1.2rem">${esc(def.name)}</h3><p class="faint small">${def.ref[P.standard] ? "Zahtjev: " + esc(def.ref[P.standard]) : "Dodatni registar"} · ${rows.length} zapisa</p></div>
+      <div class="inline"><a class="btn" href="/api/projects/${P.id}/registers.xlsx?type=r:${type}">${ICON.csv} Excel</a><button class="btn primary w" id="nrec">+ ${esc(def.one)}</button></div></div>
+      <div class="tools"><input id="rq" type="search" placeholder="Pretraži registar…"></div><div id="rtb" class="tblw"></div>${opts.extra || ""}`;
+    const cell = (f, v) => v == null || v === "" ? '<span class="faint">–</span>' : f.t === "date" ? (f.k === "next" || f.k === "review" || f.k === "due" ? dueTag(v) : fmtDate(v)) : f.t === "sel" && ["status", "score", "result"].includes(f.k) ? `<span class="tag">${esc(v)}</span>` : esc(String(v).slice(0, 120));
+    const draw = () => { const q = val("rq").toLowerCase(), list = rows.filter(r => !q || JSON.stringify(r.data).toLowerCase().includes(q));
+      $("#rtb").innerHTML = list.length ? `<table class="tbl"><thead><tr><th>Oznaka</th>${cols.map((f, i) => `<th class="${i > 3 ? "hide-m" : ""}">${esc(f.l)}</th>`).join("")}</tr></thead><tbody>
+        ${list.map(r => `<tr class="row" data-id="${r.id}"><td class="code">${recRef(type, r.ref)}</td>${cols.map((f, i) => `<td class="${i > 3 ? "hide-m" : ""}${i === 0 ? " ttl" : ""}">${i === 0 ? `<b>${cell(f, r.data[f.k])}</b>` : cell(f, r.data[f.k])}</td>`).join("")}</tr>`).join("")}</tbody></table>`
+        : `<div class="card empty small">${rows.length ? "Nema zapisa za ovu pretragu." : "Registar je prazan."}</div>`;
+      $$("#rtb tr.row").forEach(tr => tr.addEventListener("click", () => recordDrawer(type, rows.find(r => r.id === tr.dataset.id)))); };
+    $("#rq").addEventListener("input", draw);
+    $("#nrec") && $("#nrec").addEventListener("click", () => recordDrawer(type, null));
+    draw();
+  }
+  function recordDrawer(type, r) {
+    const def = REG()[type], d = (r && r.data) || {};
+    const input = f => { const v = d[f.k] == null ? "" : d[f.k], id = "rf-" + f.k;
+      if (f.t === "area") return `<label class="f">${esc(f.l)}<textarea id="${id}">${esc(v)}</textarea></label>`;
+      if (f.t === "sel" || f.t === "yn") return `<label class="f">${esc(f.l)}<select id="${id}"><option value="">–</option>${(f.t === "yn" ? ["Da", "Ne"] : f.o).map(o => `<option ${o === v ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`;
+      return `<label class="f">${esc(f.l)}<input id="${id}" type="${f.t === "date" ? "date" : f.t === "num" ? "number" : "text"}" value="${esc(v)}"></label>`; };
+    const fs = def.fields, html = []; for (let i = 0; i < fs.length; i++) { const f = fs[i], g = fs[i + 1];
+      if (f.t !== "area" && g && g.t !== "area" && i > 0) { html.push(`<div class="two">${input(f)}${input(g)}</div>`); i++; } else html.push(input(f)); }
+    openDrawer(`${dhead(r ? esc(d[def.title] || def.one) : "Novi zapis: " + esc(def.one), r ? recRef(type, r.ref) + " · " + esc(def.name) : esc(def.name))}
+      <form class="form" id="recf">${html.join("")}${actions(!!r)}</form>
+      ${r && ["improvements", "incidents", "complaints", "suppliers"].includes(type) ? linkedTasks("record_id", r.id, "Mjere") : ""}`, () => refresh());
+    $("#recf").addEventListener("submit", async e => {
+      e.preventDefault();
+      const data = Object.fromEntries(fs.map(f => [f.k, val("rf-" + f.k)]));
+      if (!data[def.title]) return toast("Upišite: " + fs.find(f => f.k === def.title).l);
+      await api(`/projects/${P.id}/records${r ? "/" + r.id : ""}`, { method: r ? "PUT" : "POST", body: { type, data } });
+      toast("Sačuvano"); closeDrawer();
+    });
+    $("#del") && $("#del").addEventListener("click", async () => { if (!confirm("Obrisati zapis?")) return; await api(`/projects/${P.id}/records/${r.id}`, { method: "DELETE" }); closeDrawer(); });
+    if (r && $("#lt-add")) bindLinked("record_id", r.id, async () => { const rows = await api(`/projects/${P.id}/records?type=${type}`); recordDrawer(type, rows.find(x => x.id === r.id)); });
+  }
+  async function tabImprovements() {
+    const ofi = FINDS.filter(f => f.kind === "ofi");
+    await tabRegister("improvements", { noBack: true, extra: ofi.length ? `<h3 class="gh">Prilike za poboljšanje iz audita</h3><div class="card flush"><div class="list plain">${ofi.map(f => `<a class="li" href="#/p/${P.id}/audit"><span class="grow"><b>${N(f.ref)} ${esc(f.title)}</b><small>${FSTAT[f.status]}${f.owner ? " · " + esc(f.owner) : ""}</small></span>${fkTag("ofi")}</a>`).join("")}</div></div>` : "" });
+  }
+
+  /* ---------- management reviews ---------- */
+  const RVS = { planned: "Planirano", held: "Održano", approved: "Zapisnik odobren" };
+  async function tabReviews() {
+    const rs = await api(`/projects/${P.id}/reviews`);
+    $("#tab").innerHTML = `<div class="head sm"><p class="muted" style="max-width:52rem">Uprava najmanje jednom godišnje preispituje sistem: ulazi (nalazi, audit, rizici, ciljevi, dobavljači, prilike za poboljšanje) i izlazi (odluke, promjene, resursi). Evidenta predlaže ulaze iz podataka projekta.</p><button class="btn primary w" id="nrv">+ Novo preispitivanje</button></div>
+      ${rs.length ? `<div class="grid agrid">${rs.map(r => `<div class="card acard" data-r="${r.id}"><div class="ahead"><span class="tag ${r.status === "approved" ? "teal" : r.status === "held" ? "blue" : ""}">${RVS[r.status]}</span><small class="faint">${r.date ? fmtDate(r.date) : "bez datuma"}</small></div>
+        <h3>${esc(r.title)}</h3><p class="muted small">${esc(r.participants || "Učesnici nisu upisani")}</p>
+        <div class="afoot"><span class="small">${TASKS.filter(t => t.review_id === r.id).length} mjera</span><a class="btn sm" href="/api/projects/${P.id}/report/review.docx?review=${r.id}">${ICON.word} Zapisnik</a></div></div>`).join("")}</div>`
+        : `<div class="card empty"><h2>Još nema preispitivanja</h2><p>Zahtjev 9.3 u ISO 27001 i ISO 9001; za NIS2 uprava odobrava i nadzire mjere (član 20).</p></div>`}`;
+    $("#nrv") && $("#nrv").addEventListener("click", () => reviewDrawer({ data: {} }));
+    $$(".acard[data-r]").forEach(c => c.addEventListener("click", e => { if (e.target.closest("a")) return; reviewDrawer(rs.find(r => r.id === c.dataset.r)); }));
+  }
+  function reviewDrawer(r) {
+    const d = r.data || {};
+    openDrawer(`${dhead(r.id ? esc(r.title) : "Novo preispitivanje", "Preispitivanje od strane uprave")}
+      <form class="form" id="rvf">
+        <div class="two"><label class="f">Naziv<input id="rv-t" value="${esc(r.title || "Preispitivanje od strane uprave " + new Date().getFullYear())}"></label><label class="f">Datum<input id="rv-d" type="date" value="${esc(r.date)}"></label></div>
+        <div class="two"><label class="f">Učesnici<input id="rv-p" value="${esc(r.participants)}" placeholder="Direktor, vlasnik sistema, …"></label><label class="f">Status<select id="rv-s">${Object.entries(RVS).map(([k, v]) => `<option value="${k}" ${k === (r.status || "planned") ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
+        <div class="rvh"><h3>Ulazi</h3><button class="btn sm w" type="button" id="rv-auto">Popuni iz podataka projekta</button></div>
+        ${ME.reviewIn.map(([k, l]) => `<label class="f">${esc(l)}<textarea id="rv-${k}" rows="2">${esc(d[k])}</textarea></label>`).join("")}
+        <div class="rvh"><h3>Izlazi</h3></div>
+        ${ME.reviewOut.map(([k, l]) => `<label class="f">${esc(l)}<textarea id="rv-${k}" rows="3">${esc(d[k])}</textarea></label>`).join("")}
+        ${actions(!!r.id)}
+      </form>
+      ${r.id ? linkedTasks("review_id", r.id, "Mjere iz preispitivanja") + `<a class="btn" href="/api/projects/${P.id}/report/review.docx?review=${r.id}">${ICON.word} Zapisnik (Word)</a>` : ""}`, () => refresh());
+    $(".dpanel").classList.add("wide");
+    $("#rv-auto") && $("#rv-auto").addEventListener("click", async () => {
+      const a = await api(`/projects/${P.id}/reviews/autofill${r.id ? "?exclude=" + r.id : ""}`); let n = 0;
+      for (const [k, v] of Object.entries(a)) { const el = $("#rv-" + k); if (el && !el.value.trim()) { el.value = v; n++; el.classList.add("filled"); } }
+      toast(n ? `Popunjeno ${n} polja. Provjerite i dopunite tekst.` : "Nema novih podataka za popunjavanje.");
+    });
+    $("#rvf").addEventListener("submit", async e => {
+      e.preventDefault();
+      const data = Object.fromEntries([...ME.reviewIn, ...ME.reviewOut].map(([k]) => [k, val("rv-" + k)]));
+      await api(`/projects/${P.id}/reviews${r.id ? "/" + r.id : ""}`, { method: r.id ? "PUT" : "POST", body: { title: val("rv-t"), date: val("rv-d"), participants: val("rv-p"), status: val("rv-s"), data } });
+      toast("Sačuvano"); closeDrawer();
+    });
+    $("#del") && $("#del").addEventListener("click", async () => { if (!confirm("Obrisati preispitivanje?")) return; await api(`/projects/${P.id}/reviews/${r.id}`, { method: "DELETE" }); closeDrawer(); });
+    if (r.id) bindLinked("review_id", r.id, async () => { const rs = await api(`/projects/${P.id}/reviews`); reviewDrawer(rs.find(x => x.id === r.id)); });
+  }
+
+  /* ---------- project access ---------- */
+  async function tabAccess() {
+    if (RO) { $("#tab").innerHTML = `<div class="card empty small"><p>Imate pristup samo za pregled. Članove projekta vidi i mijenja administrator.</p></div>`; return; }
+    const admin = ME.user.kind === "admin";
+    const [ms, us] = await Promise.all([api(`/projects/${P.id}/members`), admin ? api("/users") : Promise.resolve([])]);
+    const cand = us.filter(u => ["consultant", "client"].includes(u.kind) && (u.kind !== "client" || u.client_id === P.client_id) && !ms.some(m => m.email === u.email));
+    $("#tab").innerHTML = `<p class="muted" style="max-width:52rem;margin-bottom:14px">Administratori vide sve projekte. Svi ostali vide ovaj projekat samo ako su ovdje dodani. Korisnici s ulogom Klijent mogu biti dodani samo na projekte svoje firme.</p>
+      ${admin ? `<form class="card form inline-form" id="mf"><select id="m-e">${cand.length ? cand.map(u => `<option value="${esc(u.email)}">${esc(u.name || u.email)} · ${KIND_T[u.kind]}${u.org ? " · " + esc(u.org) : ""}</option>`).join("") : '<option value="">Nema korisnika za dodavanje</option>'}</select>
+        <select id="m-a"><option value="view">Pregled i preuzimanje</option><option value="edit">Uređivanje</option></select><button class="btn primary" type="submit" ${cand.length ? "" : "disabled"}>Dodaj na projekat</button><a class="btn ghost" href="#/users">Korisnici</a></form>` : ""}
+      <table class="tbl" style="margin-top:14px"><thead><tr><th>Osoba</th><th>Uloga</th><th>Pristup</th><th></th></tr></thead><tbody>
+      ${ms.map(m => `<tr><td class="ttl"><b>${esc(m.name || m.email)}</b><small>${esc(m.name ? m.email : "")}</small></td><td><span class="role ${m.kind}">${KIND_T[m.kind] || "–"}</span></td>
+        <td>${admin ? `<select class="stsel" data-m="${esc(m.email)}"><option value="view" ${m.access === "view" ? "selected" : ""}>Pregled</option><option value="edit" ${m.access === "edit" ? "selected" : ""}>Uređivanje</option></select>` : (m.access === "edit" ? "Uređivanje" : "Pregled")}</td>
+        <td>${admin ? `<button class="btn sm ghost danger" data-rm="${esc(m.email)}" type="button">Ukloni</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="4" class="muted">Nema članova.</td></tr>'}</tbody></table>`;
+    $("#mf") && $("#mf").addEventListener("submit", async e => { e.preventDefault(); if (!val("m-e")) return; await api(`/projects/${P.id}/members`, { method: "POST", body: { email: val("m-e"), access: val("m-a") } }); toast("Dodano"); tabAccess(); });
+    $$("[data-m]").forEach(s => s.addEventListener("change", async () => { await api(`/projects/${P.id}/members`, { method: "POST", body: { email: s.dataset.m, access: s.value } }); toast("Pristup ažuriran"); }));
+    $$("[data-rm]").forEach(b => b.addEventListener("click", async () => { if (!confirm("Ukloniti pristup za " + b.dataset.rm + "?")) return; await api(`/projects/${P.id}/members/${encodeURIComponent(b.dataset.rm)}`, { method: "DELETE" }); tabAccess(); }));
   }
 
   /* ---------- activity tab ---------- */

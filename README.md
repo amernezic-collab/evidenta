@@ -33,7 +33,17 @@ zvanični ISA workbook; moduli TISAX za zaštitu prototipova i zaštitu podataka
 ## Migracije
 Workers Builds ne pokreće migracije. Nova migracija se primijeni na produkcijsku bazu prije pusha
 (Cloudflare D1 konzola ili `npx wrangler d1 migrations apply evidenta --remote`).
-Primijenjeno: 0001_init.sql, 0002_risks_audits.sql.
+Primijenjeno: 0001_init.sql, 0002_risks_audits.sql, 0003_access_registers_reviews.sql.
 
 ## Word izvještaji
 `src/docx.js` generiše .docx bez vanjskih biblioteka (gap analiza, SoA, registar rizika, plan mjera, izvještaj o auditu).
+
+## Pristup
+Cloudflare Access određuje ko se može prijaviti; Evidenta određuje šta ko vidi (`src/access.js`).
+Uloge: administrator (sve), konsultant (samo dodijeljeni projekti), klijent (samo dodijeljeni projekti vlastite firme),
+čeka odobrenje (ne vidi ništa). Nova osoba nakon prve prijave čeka da je administrator odobri u "Korisnici i pristup".
+Ako nijedan administrator ne postoji, prva prijavljena osoba postaje administrator.
+
+## Registri i izvještaji
+`src/registers.js` definiše registre (dokumenti, imovina, dobavljači, incidenti, zakonski zahtjevi, ciljevi, obuke,
+poboljšanja i drugi) i uz koje standarde idu. Excel (`src/xlsx.js`) i Word (`src/docx.js`) se generišu bez vanjskih biblioteka.

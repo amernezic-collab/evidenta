@@ -3,6 +3,8 @@
  */
 import { buildDocx, DOCX_W as W } from "./docx.js";
 import { STANDARDS } from "./catalog.js";
+import { REGISTERS } from "./registers.js";
+import { mgmtDocx, reviewDocx } from "./more.js";
 
 const now = () => new Date().toISOString();
 const uid = () => crypto.randomUUID();
@@ -147,33 +149,41 @@ export async function projectCounters(env, id) {
   return r;
 }
 
-export async function dashboard(env, user, projects) {
+export async function dashboard(env, u, projects, sc) {
   const soon = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
+  const [tsql, tb] = sc("t.project_id"), [fsql, fb] = sc("f.project_id"), [asql, ab] = sc("a.project_id");
   const [tasks, findings, activity] = await Promise.all([
     env.DB.prepare(`SELECT t.*, p.name project_name, c.name client_name FROM tasks t JOIN projects p ON p.id=t.project_id JOIN clients c ON c.id=p.client_id
-      WHERE p.status='active' AND t.status!='done' AND t.due IS NOT NULL AND t.due <= ? ORDER BY t.due LIMIT 40`).bind(soon).all(),
+      WHERE p.status='active' AND t.status!='done' AND t.due IS NOT NULL AND t.due <= ? AND ${tsql} ORDER BY t.due LIMIT 40`).bind(soon, ...tb).all(),
     env.DB.prepare(`SELECT f.*, p.name project_name, c.name client_name FROM findings f JOIN projects p ON p.id=f.project_id JOIN clients c ON c.id=p.client_id
-      WHERE p.status='active' AND f.status!='closed' ORDER BY f.kind='major' DESC, f.due IS NULL, f.due LIMIT 20`).all(),
-    env.DB.prepare(`SELECT a.*, p.name project_name FROM audit a LEFT JOIN projects p ON p.id=a.project_id ORDER BY a.id DESC LIMIT 14`).all()
+      WHERE p.status='active' AND f.status!='closed' AND ${fsql} ORDER BY f.kind='major' DESC, f.due IS NULL, f.due LIMIT 20`).bind(...fb).all(),
+    env.DB.prepare(`SELECT a.*, p.name project_name FROM audit a LEFT JOIN projects p ON p.id=a.project_id WHERE ${asql} ORDER BY a.id DESC LIMIT 14`).bind(...ab).all()
   ]);
-  const me = user.toLowerCase(), local = me.split("@")[0];
-  const mine = tasks.results.filter(t => { const o = (t.owner || "").toLowerCase(); return o && (o === me || o.includes(local)); });
+  const me = u.email.toLowerCase(), local = me.split("@")[0], name = (u.name || "").toLowerCase();
+  const mine = tasks.results.filter(t => { const o = (t.owner || "").toLowerCase(); return o && (o === me || o.includes(local) || (name && o.includes(name))); });
   return { projects, tasks: tasks.results, mine, findings: findings.results, activity: activity.results };
 }
 
-export async function search(env, q) {
+export async function search(env, q, sc, u) {
   q = String(q || "").trim().slice(0, 80);
   if (q.length < 2) return [];
   const like = "%" + q.replace(/[%_]/g, "") + "%";
+  const one = (sql, col) => { const [w, b] = sc(col); return env.DB.prepare(sql.replace("%S", w)).bind(like, ...b); };
+  const clients = u.kind === "admin" ? "1=1" : "id IN (SELECT client_id FROM projects WHERE %S)";
   const rs = await env.DB.batch([
-    env.DB.prepare("SELECT 'client' t, id, name title, country sub, NULL project_id FROM clients WHERE name LIKE ?1 LIMIT 8").bind(like),
-    env.DB.prepare("SELECT 'project' t, p.id, p.name title, c.name sub, p.id project_id FROM projects p JOIN clients c ON c.id=p.client_id WHERE p.name LIKE ?1 OR c.name LIKE ?1 LIMIT 8").bind(like),
-    env.DB.prepare("SELECT 'task' t, t.id, t.title, p.name sub, t.project_id FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.title LIKE ?1 OR t.owner LIKE ?1 LIMIT 8").bind(like),
-    env.DB.prepare("SELECT 'risk' t, r.id, 'R-' || printf('%03d', r.ref) || ' ' || r.asset title, p.name sub, r.project_id FROM risks r JOIN projects p ON p.id=r.project_id WHERE r.asset LIKE ?1 OR r.threat LIKE ?1 LIMIT 8").bind(like),
-    env.DB.prepare("SELECT 'finding' t, f.id, 'N-' || printf('%03d', f.ref) || ' ' || f.title title, p.name sub, f.project_id FROM findings f JOIN projects p ON p.id=f.project_id WHERE f.title LIKE ?1 OR f.description LIKE ?1 LIMIT 8").bind(like),
-    env.DB.prepare("SELECT 'evidence' t, e.id, e.name title, p.name sub, e.project_id FROM evidence e JOIN projects p ON p.id=e.project_id WHERE e.deleted_at IS NULL AND e.name LIKE ?1 LIMIT 8").bind(like)
+    one(`SELECT 'client' t, id, name title, country sub, NULL project_id FROM clients WHERE name LIKE ? AND ${clients} LIMIT 8`, "id"),
+    one("SELECT 'project' t, p.id, p.name title, c.name sub, p.id project_id FROM projects p JOIN clients c ON c.id=p.client_id WHERE (p.name LIKE ?1 OR c.name LIKE ?1) AND %S LIMIT 8", "p.id"),
+    one("SELECT 'task' t, t.id, t.title, p.name sub, t.project_id FROM tasks t JOIN projects p ON p.id=t.project_id WHERE (t.title LIKE ?1 OR t.owner LIKE ?1) AND %S LIMIT 8", "t.project_id"),
+    one("SELECT 'risk' t, r.id, 'R-' || printf('%03d', r.ref) || ' ' || r.asset title, p.name sub, r.project_id FROM risks r JOIN projects p ON p.id=r.project_id WHERE (r.asset LIKE ?1 OR r.threat LIKE ?1) AND %S LIMIT 8", "r.project_id"),
+    one("SELECT 'finding' t, f.id, 'N-' || printf('%03d', f.ref) || ' ' || f.title title, p.name sub, f.project_id FROM findings f JOIN projects p ON p.id=f.project_id WHERE (f.title LIKE ?1 OR f.description LIKE ?1) AND %S LIMIT 8", "f.project_id"),
+    one("SELECT 'evidence' t, e.id, e.name title, p.name sub, e.project_id FROM evidence e JOIN projects p ON p.id=e.project_id WHERE e.deleted_at IS NULL AND e.name LIKE ?1 AND %S LIMIT 8", "e.project_id"),
+    one("SELECT 'record' t, r.id, r.data title, r.type || '|' || p.name sub, r.project_id FROM records r JOIN projects p ON p.id=r.project_id WHERE r.data LIKE ?1 AND %S LIMIT 10", "r.project_id")
   ]);
-  return rs.flatMap(r => r.results);
+  return rs.flatMap(r => r.results).map(r => {
+    if (r.t !== "record") return r;
+    const [type, pname] = r.sub.split("|"), def = REGISTERS[type]; let d = {}; try { d = JSON.parse(r.title); } catch (e) {}
+    return { ...r, type, title: def ? `${def.prefix}: ${d[def.title] || ""}` : "", sub: (def ? def.name + " · " : "") + pname };
+  });
 }
 
 /* ---------- Word reports ---------- */
@@ -182,7 +192,7 @@ const stCell = s => s == null ? { t: STATUS_TXT.null, color: "8A97A6" } : { t: S
 const lvCell = (l, i) => { const s = l && i ? l * i : null, lv = RISK_LEVEL(s); return s ? { t: `${s} · ${LEVEL_TXT[lv]}`, fill: LEVEL_FILL[lv], bold: true } : "–"; };
 const R = n => "R-" + String(n).padStart(3, "0"), N = n => "N-" + String(n).padStart(3, "0");
 
-export async function report(env, user, pr, kind, items, summary, auditId) {
+export async function report(env, user, pr, kind, items, summary, auditId, reviewId) {
   const code = Object.fromEntries(items.map(i => [i.id, i.code]));
   const title = Object.fromEntries(items.map(i => [i.id, i.title]));
   const [tasks, risks, findings] = await Promise.all([
@@ -197,6 +207,8 @@ export async function report(env, user, pr, kind, items, summary, auditId) {
   const taskRows = list => list.map(t => [t.title, code[t.item_id] || (t.risk_id ? "Rizik" : t.finding_id ? "Nalaz" : "–"), t.owner || "–", fmtD(t.due), TSTAT_TXT[t.status]]);
   const taskTable = list => ({ table: { widths: [3900, 1100, 1900, 1300, W - 8200], head: ["Mjera", "Veza", "Odgovorni", "Rok", "Status"], rows: taskRows(list) } });
   let r;
+  if (kind === "mgmt") return mgmtDocx(env, user, pr, items, summary, meta, note);
+  if (kind === "review") return reviewDocx(env, user, pr, reviewId, note);
 
   if (kind === "gap") {
     const app = items.filter(i => i.applicable), dist = [3, 2, 1, 0, null].map(s => [s, app.filter(i => (i.status ?? null) === s).length]);
@@ -284,3 +296,4 @@ export async function report(env, user, pr, kind, items, summary, auditId) {
   r.author = user;
   return buildDocx(r);
 }
+export { fmtD, stCell, lvCell, R, N, STATUS_TXT, STATUS_FILL, LEVEL_TXT, LEVEL_FILL, TREAT_TXT, RSTAT_TXT, FKIND_TXT, FSTAT_TXT, AKIND_TXT, TSTAT_TXT, PHASES, log, nextRef };

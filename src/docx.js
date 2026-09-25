@@ -28,11 +28,17 @@ function para(text, o = {}) {
     o.align ? `<w:jc w:val="${o.align}"/>` : "", o.num ? `<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>` : ""].join("");
   return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ""}${run(text, o)}</w:p>`;
 }
+/* horizontal bar made of shaded fixed-width spaces */
+function bar(pct, color, n) {
+  const f = Math.max(0, Math.min(n, Math.round(pct / 100 * n))), sp = k => "\u00A0".repeat(k);
+  const r = (k, fill) => k ? `<w:r><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/><w:sz w:val="16"/><w:shd w:val="clear" w:color="auto" w:fill="${fill}"/></w:rPr><w:t xml:space="preserve">${sp(k)}</w:t></w:r>` : "";
+  return r(f, color) + r(n - f, "E9EEF4");
+}
 function cell(c, w, head, zebra, keep) {
   const o = typeof c === "object" && c !== null ? c : { t: c };
   const fill = head ? NAVY : o.fill || (zebra ? "F6F8FB" : null);
   return `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${fill}"/>` : ""}<w:vAlign w:val="top"/></w:tcPr>`
-    + `<w:p><w:pPr>${keep ? "<w:keepNext/>" : ""}<w:spacing w:after="0"/></w:pPr>${run(o.t, { bold: head || o.bold, color: head ? "FFFFFF" : o.color, size: head ? 17 : 18 })}</w:p></w:tc>`;
+    + `<w:p><w:pPr>${keep ? "<w:keepNext/>" : ""}<w:spacing w:after="0"/>${o.align ? `<w:jc w:val="${o.align}"/>` : ""}</w:pPr>${o.bar != null ? bar(o.bar, o.color || "2F7DE1", o.n || 28) : run(o.t, { bold: head || o.bold, color: head ? "FFFFFF" : o.color, size: head ? 17 : o.size || 18 })}</w:p></w:tc>`;
 }
 function table(t) {
   const widths = t.widths || t.head.map(() => Math.floor(W / t.head.length));
@@ -134,3 +140,4 @@ export function buildDocx(report) {
   ]);
 }
 export const DOCX_W = W;
+export { zip, X as xmlEsc };

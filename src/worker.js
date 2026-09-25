@@ -10,6 +10,9 @@
  */
 import { STANDARDS } from "./catalog.js";
 import { risksApi, auditsApi, findingsApi, projectCounters, dashboard, search, report } from "./extra.js";
+import { recordsApi, reviewsApi, registersXlsx, snapshot, history, REVIEW_IN, REVIEW_OUT } from "./more.js";
+import { REGISTERS } from "./registers.js";
+import { loadUser, scope, projectAccess, isAdmin, active } from "./access.js";
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
 const now = () => new Date().toISOString();
@@ -124,19 +127,59 @@ async function getProject(env, id) {
 async function api(req, env, url, user) {
   const p = url.pathname.replace(/^\/api/, "").split("/").filter(Boolean);
   const m = req.method;
+  const u = await loadUser(env, user), sc = col => scope(u, col), admin = isAdmin(u), staff = admin || u.kind === "consultant";
 
-  if (p[0] === "me") return json({ email: user, standards: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, v.name])),
-    catalogs: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, { kinds: v.kinds, groups: v.groups, soa: v.soa, count: v.items.length }])) });
+  if (p[0] === "me") return json({ email: user, user: { email: u.email, name: u.name, kind: u.kind, client_id: u.client_id },
+    standards: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, v.name])),
+    catalogs: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, { kinds: v.kinds, groups: v.groups, soa: v.soa, count: v.items.length }])),
+    registers: REGISTERS, reviewIn: REVIEW_IN, reviewOut: REVIEW_OUT });
+  if (!active(u)) return err(403, "pending");
 
   if (p[0] === "dashboard" && m === "GET") {
-    const rows = (await env.DB.prepare("SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id WHERE p.status='active' ORDER BY p.deadline IS NULL, p.deadline").all()).results;
-    return json(await dashboard(env, user, await listProjects(env, rows)));
+    const [w, b] = sc("p.id");
+    const rows = (await env.DB.prepare(`SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id WHERE p.status='active' AND ${w} ORDER BY p.deadline IS NULL, p.deadline`).bind(...b).all()).results;
+    return json(await dashboard(env, u, await listProjects(env, rows), sc));
   }
-  if (p[0] === "search" && m === "GET") return json(await search(env, url.searchParams.get("q")));
+  if (p[0] === "search" && m === "GET") return json(await search(env, url.searchParams.get("q"), sc, u));
+
+  /* users and access (admin) */
+  if (p[0] === "users") {
+    if (!admin) return err(403, "admin_only");
+    if (!p[1] && m === "GET") return json((await env.DB.prepare(`SELECT u.*, c.name client_name, (SELECT COUNT(*) FROM memberships WHERE email=u.email) projects FROM users u LEFT JOIN clients c ON c.id=u.client_id ORDER BY u.kind='pending' DESC, u.kind, u.email`).all()).results);
+    if (m === "POST" || m === "PUT") {
+      const b = await body(req), email = String((p[1] ? decodeURIComponent(p[1]) : b.email) || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err(400, "email");
+      const kind = ["admin", "consultant", "client", "pending", "disabled"].includes(b.kind) ? b.kind : "consultant";
+      if (email === u.email && kind !== "admin") return err(400, "self");
+      const client = kind === "client" ? S(b.client_id, 64) : null;
+      if (kind === "client" && !(client && await env.DB.prepare("SELECT 1 FROM clients WHERE id=?").bind(client).first())) return err(400, "client");
+      await env.DB.prepare(`INSERT INTO users (email,name,org,kind,client_id,created_at,created_by) VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(email) DO UPDATE SET name=excluded.name, org=excluded.org, kind=excluded.kind, client_id=excluded.client_id`)
+        .bind(email, S(b.name, 120), S(b.org, 120), kind, client, now(), user).run();
+      if (kind === "client") await env.DB.prepare("DELETE FROM memberships WHERE email=? AND project_id NOT IN (SELECT id FROM projects WHERE client_id=?)").bind(email, client).run();
+      if (kind === "disabled") await env.DB.prepare("DELETE FROM memberships WHERE email=?").bind(email).run();
+      await log(env, user, "update", "user", email, null, { title: email, kind });
+      return json({ ok: true });
+    }
+  }
 
   /* clients */
+  if (p[0] === "clients" && p[1] && m === "GET") {
+    const [w, b] = sc("id");
+    const c = await env.DB.prepare(`SELECT * FROM clients WHERE id=? AND (${admin ? "1=1" : `id IN (SELECT client_id FROM projects WHERE ${w}) OR created_by=?`})`).bind(p[1], ...(admin ? [] : [...b, user])).first();
+    if (!c) return err(404, "client");
+    const [w2, b2] = sc("p.id");
+    const rows = (await env.DB.prepare(`SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id WHERE p.client_id=? AND ${w2} ORDER BY p.status, p.deadline`).bind(c.id, ...b2).all()).results;
+    return json({ ...c, projectList: await listProjects(env, rows) });
+  }
   if (p[0] === "clients" && !p[1]) {
-    if (m === "GET") return json((await env.DB.prepare("SELECT c.*, (SELECT COUNT(*) FROM projects WHERE client_id=c.id) projects FROM clients c ORDER BY name").all()).results);
+    if (m === "GET") {
+      const [w, b] = sc("id");
+      const where = admin ? "1=1" : `c.id IN (SELECT client_id FROM projects WHERE ${w}) OR c.created_by=?`;
+      const [w2, b2] = sc("id");
+      return json((await env.DB.prepare(`SELECT c.*, (SELECT COUNT(*) FROM projects WHERE client_id=c.id AND ${w2}) projects FROM clients c WHERE ${where} ORDER BY name`).bind(...b2, ...(admin ? [] : [...b, user])).all()).results);
+    }
+    if (!staff) return err(403, "read_only");
     if (m === "POST") {
       const b = await body(req); const name = S(b.name, 160); if (!name) return err(400, "name");
       const id = uid();
@@ -147,6 +190,11 @@ async function api(req, env, url, user) {
     }
   }
   if (p[0] === "clients" && p[1] && m === "PUT") {
+    if (!admin) {
+      const [w, b0] = sc("id");
+      const ok = u.kind === "consultant" && await env.DB.prepare(`SELECT 1 FROM clients WHERE id=? AND (created_by=? OR id IN (SELECT client_id FROM projects WHERE ${w} AND id IN (SELECT project_id FROM memberships WHERE email=? AND access='edit')))`).bind(p[1], user, ...b0, user).first();
+      if (!ok) return err(403, "read_only");
+    }
     const b = await body(req); const name = S(b.name, 160); if (!name) return err(400, "name");
     await env.DB.prepare("UPDATE clients SET name=?,country=?,industry=?,contact_name=?,contact_email=?,notes=? WHERE id=?")
       .bind(name, S(b.country, 60), S(b.industry, 120), S(b.contact_name, 120), S(b.contact_email, 160), S(b.notes, 4000), p[1]).run();
@@ -157,10 +205,12 @@ async function api(req, env, url, user) {
   /* projects */
   if (p[0] === "projects" && !p[1]) {
     if (m === "GET") {
-      const rows = (await env.DB.prepare("SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id ORDER BY p.status, p.deadline IS NULL, p.deadline").all()).results;
+      const [w, b] = sc("p.id");
+      const rows = (await env.DB.prepare(`SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id WHERE ${w} ORDER BY c.name, p.status, p.deadline IS NULL, p.deadline`).bind(...b).all()).results;
       return json(await listProjects(env, rows));
     }
     if (m === "POST") {
+      if (!staff) return err(403, "read_only");
       const b = await body(req);
       const name = S(b.name, 160), client = S(b.client_id, 64), std = STANDARDS[b.standard] ? b.standard : null;
       if (!name || !client || !std) return err(400, "missing");
@@ -168,6 +218,7 @@ async function api(req, env, url, user) {
       const id = uid();
       await env.DB.prepare("INSERT INTO projects (id,client_id,standard,name,scope,requester,deadline,phase,lead,created_at,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(id, client, std, name, S(b.scope, 4000), S(b.requester, 200), S(b.deadline, 10), S(b.phase, 20) || "gap", S(b.lead, 160) || user, now(), user, now()).run();
+      await env.DB.prepare("INSERT OR IGNORE INTO memberships (project_id,email,access,added_at,added_by) VALUES (?,?,?,?,?)").bind(id, user, "edit", now(), user).run();
       await log(env, user, "create", "project", id, id, { name });
       return json({ id }, 201);
     }
@@ -175,19 +226,55 @@ async function api(req, env, url, user) {
 
   if (p[0] === "projects" && p[1]) {
     const pr = await getProject(env, p[1]);
-    if (!pr) return err(404, "project");
-    const sub = p[2];
+    const acc = await projectAccess(env, u, pr);
+    if (!acc) return err(404, "project");
+    const sub = p[2], write = acc === "edit";
+    const safe = (pr.client_name + "_" + pr.name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\-]+/g, "_").slice(0, 60);
 
-    if (!sub && m === "GET") { const items = await projectItems(env, pr); return json({ ...pr, summary: summarize(items), counters: await projectCounters(env, pr.id) }); }
+    if (!sub && m === "GET") {
+      const items = await projectItems(env, pr), summary = summarize(items), counters = await projectCounters(env, pr.id);
+      await snapshot(env, pr, summary, counters);
+      return json({ ...pr, summary, counters, access: acc });
+    }
+    if (sub === "history" && m === "GET") return json(await history(env, pr));
+    if (sub === "records") return recordsApi(req, env, user, pr, p, url, write);
+    if (sub === "reviews") return reviewsApi(req, env, user, pr, p, write);
+    if (sub === "members") {
+      if (m === "GET") { if (!write) return err(403, "read_only"); return json((await env.DB.prepare("SELECT m.*, u.name, u.kind FROM memberships m LEFT JOIN users u ON u.email=m.email WHERE m.project_id=? ORDER BY m.access, m.email").bind(pr.id).all()).results); }
+      if (!admin) return err(403, "admin_only");
+      if (m === "POST") {
+        const b = await body(req), email = String(b.email || "").trim().toLowerCase(), access = b.access === "edit" ? "edit" : "view";
+        const target = await env.DB.prepare("SELECT * FROM users WHERE email=?").bind(email).first();
+        if (!target || !active(target)) return err(400, "user_not_active");
+        if (target.kind === "client" && target.client_id !== pr.client_id) return err(400, "other_client");
+        await env.DB.prepare("INSERT INTO memberships (project_id,email,access,added_at,added_by) VALUES (?,?,?,?,?) ON CONFLICT(project_id,email) DO UPDATE SET access=excluded.access").bind(pr.id, email, access, now(), user).run();
+        await log(env, user, "update", "access", email, pr.id, { title: `${email}: ${access === "edit" ? "uređivanje" : "pregled"}` });
+        return json({ ok: true });
+      }
+      if (m === "DELETE" && p[3]) {
+        const email = decodeURIComponent(p[3]);
+        await env.DB.prepare("DELETE FROM memberships WHERE project_id=? AND email=?").bind(pr.id, email).run();
+        await log(env, user, "delete", "access", email, pr.id, { title: email });
+        return json({ ok: true });
+      }
+    }
+    if (sub === "registers.xlsx" && m === "GET") {
+      const items = await projectItems(env, pr), type = url.searchParams.get("type") || "all";
+      const x = await registersXlsx(env, pr, items, summarize(items), type, user);
+      if (!x) return err(404, "register");
+      await log(env, user, "export", "project", pr.id, pr.id, { file: x.name + ".xlsx" });
+      return new Response(x.bytes, { headers: { "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": `attachment; filename="${x.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\-]+/g, "_")}_${safe}.xlsx"`, "cache-control": "no-store" } });
+    }
+    if (m !== "GET" && !write) return err(403, "read_only");
     if (sub === "risks") return risksApi(req, env, user, pr, p);
     if (sub === "audits") return auditsApi(req, env, user, pr, p);
     if (sub === "findings") return findingsApi(req, env, user, pr, p);
     if (sub === "report" && m === "GET" && p[3]) {
       const kind = p[3].replace(/\.docx$/, ""), items = await projectItems(env, pr);
-      const bytes = await report(env, user, pr, kind, items, summarize(items), url.searchParams.get("audit"));
+      const bytes = await report(env, user, pr, kind, items, summarize(items), url.searchParams.get("audit"), url.searchParams.get("review"));
       if (!bytes) return err(404, "report");
-      const names = { gap: "Gap_analiza", soa: "Izjava_o_primjenjivosti", risks: "Registar_rizika", tasks: "Plan_mjera", audit: "Izvjestaj_o_auditu" };
-      const safe = (pr.client_name + "_" + pr.name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\-]+/g, "_").slice(0, 60);
+      const names = { gap: "Gap_analiza", soa: "Izjava_o_primjenjivosti", risks: "Registar_rizika", tasks: "Plan_mjera", audit: "Izvjestaj_o_auditu", mgmt: "Izvjestaj_za_upravu", review: "Zapisnik_preispitivanja" };
       await log(env, user, "export", "project", pr.id, pr.id, { file: kind + ".docx" });
       return new Response(bytes, { headers: { "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "content-disposition": `attachment; filename="${names[kind]}_${safe}.docx"`, "cache-control": "no-store" } });
@@ -223,6 +310,7 @@ async function api(req, env, url, user) {
       const id = uid();
       await env.DB.prepare("INSERT INTO tasks (id,project_id,item_id,risk_id,finding_id,title,owner,due,status,created_at,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(id, pr.id, S(b.item_id, 20), S(b.risk_id, 64), S(b.finding_id, 64), title, S(b.owner, 160), S(b.due, 10), "open", now(), user, now()).run();
+      if (b.review_id || b.record_id) await env.DB.prepare("UPDATE tasks SET review_id=?, record_id=? WHERE id=?").bind(S(b.review_id, 64), S(b.record_id, 64), id).run();
       await log(env, user, "create", "task", id, pr.id, { title });
       return json({ id }, 201);
     }
@@ -275,10 +363,13 @@ async function api(req, env, url, user) {
   if (p[0] === "tasks" && p[1]) {
     const t = await env.DB.prepare("SELECT * FROM tasks WHERE id=?").bind(p[1]).first();
     if (!t) return err(404, "task");
+    const acc = await projectAccess(env, u, await getProject(env, t.project_id));
+    if (!acc) return err(404, "task");
+    if (acc !== "edit") return err(403, "read_only");
     if (m === "PUT") {
       const b = await body(req);
       await env.DB.prepare("UPDATE tasks SET title=?,owner=?,due=?,status=?,item_id=?,updated_at=? WHERE id=?")
-        .bind(S(b.title, 300) || t.title, S(b.owner, 160), S(b.due, 10), ["open", "doing", "done"].includes(b.status) ? b.status : t.status,
+        .bind(S(b.title, 300) || t.title, b.owner === undefined ? t.owner : S(b.owner, 160), b.due === undefined ? t.due : S(b.due, 10), ["open", "doing", "done"].includes(b.status) ? b.status : t.status,
           b.item_id === undefined ? t.item_id : S(b.item_id, 20), now(), t.id).run();
       await log(env, user, "update", "task", t.id, t.project_id, { title: b.title || t.title, status: b.status });
       return json({ ok: true });
@@ -294,6 +385,9 @@ async function api(req, env, url, user) {
   if (p[0] === "evidence" && p[1]) {
     const e = await env.DB.prepare("SELECT * FROM evidence WHERE id=? AND deleted_at IS NULL").bind(p[1]).first();
     if (!e) return err(404, "evidence");
+    const acc = await projectAccess(env, u, await getProject(env, e.project_id));
+    if (!acc) return err(404, "evidence");
+    if (m !== "GET" && acc !== "edit") return err(403, "read_only");
     if (m === "GET" && p[2] === "download") {
       const obj = await env.FILES.get(e.r2_key);
       if (!obj) return err(404, "file");
