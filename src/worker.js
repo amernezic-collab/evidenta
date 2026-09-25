@@ -9,6 +9,7 @@
  *   DEV_USER            local development only (wrangler dev); never set in production
  */
 import { STANDARDS, GROUPS } from "./catalog.js";
+import { risksApi, auditsApi, findingsApi, projectCounters, dashboard, search, report } from "./extra.js";
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
 const now = () => new Date().toISOString();
@@ -109,6 +110,12 @@ function csv(rows) {
 }
 const STATUS_TXT = { null: "Nije ocijenjeno", 0: "Ne postoji", 1: "Djelimično", 2: "Uvedeno", 3: "Dokazano" };
 
+async function listProjects(env, rows) {
+  return Promise.all(rows.map(async r => {
+    const s = summarize(await projectItems(env, r)), c = await projectCounters(env, r.id);
+    return { ...r, readiness: s.readiness, assessed: s.assessed, applicable: s.applicable, total: s.total, ...c };
+  }));
+}
 async function getProject(env, id) {
   return env.DB.prepare("SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id WHERE p.id=?").bind(id).first();
 }
@@ -119,6 +126,12 @@ async function api(req, env, url, user) {
   const m = req.method;
 
   if (p[0] === "me") return json({ email: user, standards: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, v.name])), groups: GROUPS });
+
+  if (p[0] === "dashboard" && m === "GET") {
+    const rows = (await env.DB.prepare("SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id WHERE p.status='active' ORDER BY p.deadline IS NULL, p.deadline").all()).results;
+    return json(await dashboard(env, user, await listProjects(env, rows)));
+  }
+  if (p[0] === "search" && m === "GET") return json(await search(env, url.searchParams.get("q")));
 
   /* clients */
   if (p[0] === "clients" && !p[1]) {
@@ -144,13 +157,7 @@ async function api(req, env, url, user) {
   if (p[0] === "projects" && !p[1]) {
     if (m === "GET") {
       const rows = (await env.DB.prepare("SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id ORDER BY p.status, p.deadline IS NULL, p.deadline").all()).results;
-      const out = [];
-      for (const r of rows) {
-        const s = summarize(await projectItems(env, r));
-        const open = await env.DB.prepare("SELECT COUNT(*) n FROM tasks WHERE project_id=? AND status!='done'").bind(r.id).first();
-        out.push({ ...r, readiness: s.readiness, assessed: s.assessed, applicable: s.applicable, total: s.total, open_tasks: open.n });
-      }
-      return json(out);
+      return json(await listProjects(env, rows));
     }
     if (m === "POST") {
       const b = await body(req);
@@ -170,7 +177,20 @@ async function api(req, env, url, user) {
     if (!pr) return err(404, "project");
     const sub = p[2];
 
-    if (!sub && m === "GET") { const items = await projectItems(env, pr); return json({ ...pr, summary: summarize(items) }); }
+    if (!sub && m === "GET") { const items = await projectItems(env, pr); return json({ ...pr, summary: summarize(items), counters: await projectCounters(env, pr.id) }); }
+    if (sub === "risks") return risksApi(req, env, user, pr, p);
+    if (sub === "audits") return auditsApi(req, env, user, pr, p);
+    if (sub === "findings") return findingsApi(req, env, user, pr, p);
+    if (sub === "report" && m === "GET" && p[3]) {
+      const kind = p[3].replace(/\.docx$/, ""), items = await projectItems(env, pr);
+      const bytes = await report(env, user, pr, kind, items, summarize(items), url.searchParams.get("audit"));
+      if (!bytes) return err(404, "report");
+      const names = { gap: "Gap_analiza", soa: "Izjava_o_primjenjivosti", risks: "Registar_rizika", tasks: "Plan_mjera", audit: "Izvjestaj_o_auditu" };
+      const safe = (pr.client_name + "_" + pr.name).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\-]+/g, "_").slice(0, 60);
+      await log(env, user, "export", "project", pr.id, pr.id, { file: kind + ".docx" });
+      return new Response(bytes, { headers: { "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "content-disposition": `attachment; filename="${names[kind]}_${safe}.docx"`, "cache-control": "no-store" } });
+    }
     if (!sub && m === "PUT") {
       const b = await body(req);
       await env.DB.prepare("UPDATE projects SET name=?,scope=?,requester=?,deadline=?,phase=?,status=?,lead=?,updated_at=? WHERE id=?")
@@ -200,8 +220,8 @@ async function api(req, env, url, user) {
     if (sub === "tasks" && m === "POST") {
       const b = await body(req); const title = S(b.title, 300); if (!title) return err(400, "title");
       const id = uid();
-      await env.DB.prepare("INSERT INTO tasks (id,project_id,item_id,title,owner,due,status,created_at,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
-        .bind(id, pr.id, S(b.item_id, 20), title, S(b.owner, 160), S(b.due, 10), "open", now(), user, now()).run();
+      await env.DB.prepare("INSERT INTO tasks (id,project_id,item_id,risk_id,finding_id,title,owner,due,status,created_at,created_by,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+        .bind(id, pr.id, S(b.item_id, 20), S(b.risk_id, 64), S(b.finding_id, 64), title, S(b.owner, 160), S(b.due, 10), "open", now(), user, now()).run();
       await log(env, user, "create", "task", id, pr.id, { title });
       return json({ id }, 201);
     }
