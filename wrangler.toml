@@ -1,0 +1,24 @@
+name = "evidenta"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "evidenta"
+database_id = "2733b011-104c-4707-857d-ee7481d21829"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "evidenta-files"
+jurisdiction = "eu"
+
+[vars]
+ACCESS_TEAM_DOMAIN = "old-hat-7f0d.cloudflareaccess.com"
+# ACCESS_AUD = "set after creating the Access application"
