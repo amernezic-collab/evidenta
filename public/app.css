@@ -422,3 +422,24 @@ body.ro select.stsel{pointer-events:none;opacity:.8}
 @media (max-width:700px){.side .search{display:block}.hbr{grid-template-columns:28px minmax(0,1fr) 70px 38px}}
 .f input,.f select,.f textarea{font-weight:450}
 .side .brand span{display:block}
+
+/* ---------- v4: colour per standard (brand palette of sceassurance.com) ---------- */
+:root{--std-iso27001:#2f7de1;--std-iso9001:#1f9e7f;--std-nis2:#0e7fa0;--std-tisax:#e37222}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--std-iso27001:#5aa2f5;--std-iso9001:#35c29d;--std-nis2:#38bdf8;--std-tisax:#f08a3e}}
+:root[data-theme="dark"]{--std-iso27001:#5aa2f5;--std-iso9001:#35c29d;--std-nis2:#38bdf8;--std-tisax:#f08a3e}
+.tag.std{background:color-mix(in srgb,var(--sc) 13%,transparent);color:var(--sc);border:0}
+.facts .tag.std{font-size:12.5px;padding:5px 10px;border-radius:9px;font-weight:750}
+.pcard{position:relative;overflow:hidden}
+.pcard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--sc)}
+.pcard .ring .arc{stroke:var(--sc)}
+.snav .pn i{background:conic-gradient(var(--sc) calc(var(--p)*1%),var(--card2) 0)}
+.snav .pn{position:relative}
+.pclient{display:block;font-size:12px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:var(--sc,var(--orange));margin-bottom:2px}
+main .phead{border-left:4px solid var(--sc);padding-left:14px;margin-left:-18px}
+main .stitle{color:var(--ink)}
+main .stitle::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--sc);margin-right:10px;vertical-align:1px}
+.snav .pj.open>.pn{background:color-mix(in srgb,var(--sc) 10%,transparent)}
+.snav .pj.open .sn.on{background:color-mix(in srgb,var(--sc) 14%,transparent);color:var(--sc)}
+.ring.lg .arc{stroke:var(--sc,var(--blue))}
+@media (max-width:900px){main .phead{margin-left:0}}
+.snav .pn.on,.snav .pj.open>.pn{color:var(--sc)}

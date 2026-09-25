@@ -130,6 +130,8 @@
     ["Dokumentacija", [["registri", "Registri"], ["dokazi", "Dokazi"], ["izvjestaji", "Izvještaji"]]],
     ["Projekat", [["pristup", "Pristup"], ["aktivnost", "Aktivnost"]]]];
   const secLabel = (k, std) => { const K = ME.catalogs[std].kinds; return k === "zahtjevi" ? K.clause && K.clause.tab : k === "kontrole" ? K.control && K.control.tab : null; };
+  const SC = k => `var(--std-${k || "iso27001"})`;
+  const stdTag = k => `<span class="tag std" style="--sc:${SC(k)}">${esc(ME.standards[k] || k)}</span>`;
   const staff = () => ["admin", "consultant"].includes(ME.user.kind);
   async function loadNav(force) { if (!NAV || force) { const [cs, ps] = await Promise.all([api("/clients"), api("/projects")]); NAV = { cs, ps }; } return NAV; }
   function renderNav() {
@@ -141,14 +143,14 @@
       <div class="sgrp"><span>Klijenti i projekti</span>${staff() ? `<a href="#/clients" class="sadd" title="Svi klijenti">Svi</a>` : ""}</div>
       ${cs.map(c => { const cp = ps.filter(p => p.client_id === c.id), isOpen = open === c.id;
         return `<div class="cl${isOpen ? " open" : ""}"><a href="#/c/${c.id}" class="cn${CUR.view === "client" && open === c.id ? " on" : ""}">${ICON.chev}<span>${esc(c.name)}</span><small>${cp.length}</small></a>
-        ${isOpen ? cp.map(p => `<div class="pj${CUR.project === p.id ? " open" : ""}"><a href="#/p/${p.id}" class="pn${CUR.project === p.id && CUR.sec === "pregled" ? " on" : ""}"><i style="--p:${p.readiness}"></i><span>${esc(p.name)}</span></a>
+        ${isOpen ? cp.map(p => `<div class="pj${CUR.project === p.id ? " open" : ""}"><a href="#/p/${p.id}" class="pn${CUR.project === p.id && CUR.sec === "pregled" ? " on" : ""}" style="--sc:${SC(p.standard)}"><i style="--p:${p.readiness}"></i><span>${esc(p.name)}</span></a>
           ${CUR.project === p.id ? `<div class="secs">${secs(p)}</div>` : ""}</div>`).join("") : ""}</div>`; }).join("") || '<p class="faint small pad-s">Još nema klijenata.</p>'}`;
     const u = ME.user;
     $("#who").innerHTML = `<b>${esc(u.name || u.email)}</b><small>${esc(KIND_T[u.kind])}</small>`;
   }
   function setCrumb(parts) { $("#crumb").innerHTML = parts.map(([t, h], i) => h && i < parts.length - 1 ? `<a href="${h}">${esc(t)}</a>` : `<span>${esc(t)}</span>`).join('<i>›</i>'); document.title = parts.map(p => p[0]).reverse().join(" · ") + " · Evidenta"; }
   async function route() {
-    closeDrawer(); closeSearch(); document.body.classList.remove("navopen");
+    closeDrawer(); closeSearch(); document.body.classList.remove("navopen"); app.style.removeProperty("--sc");
     const h = location.hash.replace(/^#\/?/, "").split("/");
     try {
       if (!ME) { ME = await api("/me"); }
@@ -180,8 +182,8 @@
   }
 
   /* ---------- home: dashboard ---------- */
-  const pcard = p => `<a class="card pcard" href="#/p/${p.id}">${ring(p.readiness)}<div><div class="faint" style="font-size:12.5px;font-weight:650">${esc(p.client_name)}</div><h3>${esc(p.name)}</h3>
-      <div class="meta"><span class="tag">${esc(ME.standards[p.standard] || p.standard)}</span><span class="tag blue">${esc(PHASES[p.phase] || p.phase)}</span>${deadlineTag(p.deadline)}</div>
+  const pcard = p => `<a class="card pcard" href="#/p/${p.id}" style="--sc:${SC(p.standard)}">${ring(p.readiness)}<div><div class="faint" style="font-size:12.5px;font-weight:650">${esc(p.client_name)}</div><h3>${esc(p.name)}</h3>
+      <div class="meta">${stdTag(p.standard)}<span class="tag">${esc(PHASES[p.phase] || p.phase)}</span>${deadlineTag(p.deadline)}</div>
       <div class="meta"><span>${p.assessed}/${p.applicable} ocijenjeno</span><span>${p.open_tasks} mjera${p.late_tasks ? ` <b class="red">(${p.late_tasks} kasni)</b>` : ""}</span>${p.open_findings ? `<span>${p.open_findings} nalaza</span>` : ""}${p.high_risks ? `<span>${p.high_risks} visokih rizika</span>` : ""}</div></div></a>`;
   async function homeView() {
     setCrumb([["Pregled"]]);
@@ -210,8 +212,6 @@
         <aside class="dside">
           <div class="card"><h3>${ICON.task} Moje mjere</h3>${d.mine.length ? `<div class="list plain">${d.mine.slice(0, 8).map(tli).join("")}</div>` : '<p class="muted small">Nema mjera s vašim imenom i rokom u dvije sedmice. Mjere se dodjeljuju upisom imena ili e-maila u polje Odgovorni.</p>'}</div>
           <div class="card"><h3>${ICON.flag} Otvoreni nalazi</h3>${d.findings.length ? `<div class="list plain">${d.findings.slice(0, 8).map(f => `<a class="li" href="#/p/${f.project_id}/audit"><span class="grow"><b>${N(f.ref)} ${esc(f.title)}</b><small>${esc(f.client_name)}${f.due ? " · rok " + fmtDate(f.due) : ""}</small></span>${fkTag(f.kind)}</a>`).join("")}</div>` : '<p class="muted small">Nema otvorenih nalaza.</p>'}</div>
-          <div class="card"><h3>Nedavna aktivnost</h3><div class="feed">${d.activity.map(r => { let x = {}; try { x = JSON.parse(r.detail || "{}"); } catch (e) {}
-            return `<div><i></i><p><b>${esc(r.user.split("@")[0])}</b> ${esc(A[r.action] || r.action)} ${esc(x.title || x.name || x.file || r.entity_id || "")}<small>${r.project_name ? esc(r.project_name) + " · " : ""}${ago(r.at)}</small></p></div>`; }).join("") || '<p class="muted small">Još nema aktivnosti.</p>'}</div></div>
         </aside>
       </div>`;
     $("#np") && $("#np").addEventListener("click", () => newProject());
@@ -342,8 +342,9 @@
     SUB = sub || null;
     const title = sec === "zahtjevi" ? K.clause.tab : sec === "kontrole" ? K.control.tab : SEC_T[sec];
     setCrumb([[P.client_name, "#/c/" + P.client_id], [P.name, "#/p/" + P.id], ...(sec !== "pregled" ? [[title]] : [])]);
-    app.innerHTML = `<div class="phead"><div><h1>${esc(P.name)}</h1>
-      <div class="facts"><span>${esc(ME.standards[P.standard])}</span><span>Faza: <b>${esc(PHASES[P.phase] || P.phase)}</b></span>${P.deadline ? `<span>Rok: <b>${fmtDate(P.deadline)}</b></span>` : ""}${P.requester ? `<span>Traži: <b>${esc(P.requester)}</b></span>` : ""}${deadlineTag(P.deadline)}${P.status !== "active" ? '<span class="tag">Završen</span>' : ""}${RO ? `<span class="tag">${ICON.lock} Samo pregled</span>` : ""}</div></div>
+    app.style.setProperty("--sc", SC(P.standard));
+    app.innerHTML = `<div class="phead"><div><span class="pclient">${esc(P.client_name)}</span><h1>${esc(P.name)}</h1>
+      <div class="facts">${stdTag(P.standard)}<span>Faza: <b>${esc(PHASES[P.phase] || P.phase)}</b></span>${P.deadline ? `<span>Rok: <b>${fmtDate(P.deadline)}</b></span>` : ""}${P.requester ? `<span>Traži: <b>${esc(P.requester)}</b></span>` : ""}${deadlineTag(P.deadline)}${P.status !== "active" ? '<span class="tag">Završen</span>' : ""}${RO ? `<span class="tag">${ICON.lock} Samo pregled</span>` : ""}</div></div>
       <div class="inline"><a class="btn" href="/api/projects/${P.id}/report/mgmt.docx">${ICON.word} Izvještaj za upravu</a>${RO ? "" : '<button class="btn" id="pedit">Uredi projekat</button>'}</div></div>
       ${sec !== "pregled" ? `<h2 class="stitle">${esc(title)}</h2>` : ""}
       <section id="tab"></section>`;
@@ -382,7 +383,7 @@
   function tabOverview() {
     const s = P.summary, c = P.counters;
     const K = CAT().kinds;
-    const bars = kind => s.groups.filter(g => g.kind === kind).map(g => `<div class="bar" style="--c:${kind === "clause" ? "var(--blue)" : "var(--teal)"}"><span class="n">${K[kind].gp.replace("Čl. ", "")}${g.group}</span><span>${esc(g.name)}</span><span class="t"><i style="width:${g.pct}%"></i></span><span class="p">${g.pct}%</span></div>`).join("");
+    const bars = kind => s.groups.filter(g => g.kind === kind).map(g => `<div class="bar" style="--c:${kind === "clause" || !K.clause ? "var(--sc)" : "color-mix(in srgb,var(--sc) 55%,var(--ink))"}"><span class="n">${K[kind].gp.replace("Čl. ", "")}${g.group}</span><span>${esc(g.name)}</span><span class="t"><i style="width:${g.pct}%"></i></span><span class="p">${g.pct}%</span></div>`).join("");
     const app_ = ITEMS.filter(i => i.applicable);
     const dist = ST.map(x => ({ ...x, n: app_.filter(i => (i.status == null ? "" : i.status) === x.v).length }));
     const openT = TASKS.filter(t => t.status !== "done").sort((a, b) => (a.due || "9") < (b.due || "9") ? -1 : 1).slice(0, 6);
