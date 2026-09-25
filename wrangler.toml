@@ -1,6 +1,8 @@
 name = "evidenta"
 main = "src/worker.js"
 compatibility_date = "2026-09-01"
+# keep variables set in the dashboard (ACCESS_AUD) when deploying from GitHub
+keep_vars = true
 
 [assets]
 directory = "./public"
