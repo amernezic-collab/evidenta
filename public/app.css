@@ -280,3 +280,4 @@ a.li:hover{background:var(--card2)}
 .dside,.dmain{min-width:0}.dside{grid-template-columns:minmax(0,1fr)}.list{grid-template-columns:minmax(0,1fr)}
 #rtbl,#ttbl,#ftbl,#itbl,.tblw{overflow-x:auto;min-width:0}.rgrid>div{min-width:0}
 .sec .inline{flex-wrap:wrap}#lt-t,#i-tt{flex:1 1 100%}#lt-o{flex:1 1 120px!important}
+.bars.span2{grid-column:span 2}@media (max-width:1000px){.bars.span2{grid-column:auto}}

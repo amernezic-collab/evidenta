@@ -2,7 +2,7 @@
  * Evidenta: risk register, internal audits and findings, dashboard, search and Word reports.
  */
 import { buildDocx, DOCX_W as W } from "./docx.js";
-import { GROUPS, STANDARDS } from "./catalog.js";
+import { STANDARDS } from "./catalog.js";
 
 const now = () => new Date().toISOString();
 const uid = () => crypto.randomUUID();
@@ -190,7 +190,7 @@ export async function report(env, user, pr, kind, items, summary, auditId) {
     env.DB.prepare("SELECT * FROM risks WHERE project_id=? ORDER BY ref").bind(pr.id).all(),
     env.DB.prepare("SELECT * FROM findings WHERE project_id=? ORDER BY ref").bind(pr.id).all()
   ]).then(r => r.map(x => x.results));
-  const std = STANDARDS[pr.standard].name;
+  const CAT = STANDARDS[pr.standard], std = CAT.name;
   const meta = [["Klijent", pr.client_name], ["Projekat", pr.name], ["Standard", std], ["Obim", pr.scope || "–"], ["Faza", PHASES[pr.phase] || pr.phase],
     ["Rok za audit", fmtD(pr.deadline)], ["Voditelj projekta", pr.lead || "–"], ["Datum izvještaja", fmtD(now())], ["Pripremio", user]];
   const note = "Povjerljivo. Dokument je pripremljen za klijenta i ne smije se dijeliti s trećim stranama bez saglasnosti. Status zahtjeva prikazuje stanje na dan izvještaja.";
@@ -201,31 +201,32 @@ export async function report(env, user, pr, kind, items, summary, auditId) {
   if (kind === "gap") {
     const app = items.filter(i => i.applicable), dist = [3, 2, 1, 0, null].map(s => [s, app.filter(i => (i.status ?? null) === s).length]);
     const openT = tasks.filter(t => t.status !== "done");
-    const group = k => summary.groups.filter(g => g.kind === k).map(g => [(k === "control" ? "A." : "") + g.group, g.name, g.n, { t: g.pct + " %", bold: true }]);
+    const K = CAT.kinds, kinds = Object.keys(K);
+    const group = k => summary.groups.filter(g => g.kind === k).map(g => [K[k].gp + g.group, g.name, g.n, { t: g.pct + " %", bold: true }]);
     const weak = app.filter(i => i.status == null || i.status <= 1);
+    const detailKind = kinds.includes("clause") ? "clause" : "control";
+    let n = 1;
     r = { title: "Izvještaj o gap analizi", subtitle: `${pr.client_name} · ${std}`, meta, note, blocks: [
-      { h1: "1. Sažetak" },
-      { p: `Spremnost za certifikacijski audit iznosi ${summary.readiness} %. Ocijenjeno je ${summary.assessed} od ${summary.applicable} primjenjivih stavki (zahtjevi iz poglavlja 4 do 10 i kontrole Aneksa A). Otvoreno je ${openT.length} mjera, ${findings.filter(f => f.status !== "closed").length} nalaza i evidentirano ${risks.length} rizika.` },
+      { h1: `${n++}. Sažetak` },
+      { p: `Spremnost iznosi ${summary.readiness} %. Ocijenjeno je ${summary.assessed} od ${summary.applicable} primjenjivih stavki. Otvoreno je ${openT.length} mjera, ${findings.filter(f => f.status !== "closed").length} nalaza i evidentirano ${risks.length} rizika.` },
       { table: { widths: [4200, 1800, W - 6000], head: ["Status", "Broj stavki", "Udio"], rows: dist.map(([s, n]) => [stCell(s), String(n), app.length ? Math.round(n / app.length * 100) + " %" : "–"]) } },
       { p: "Skala: Ne postoji (0) · Djelimično (1/3) · Uvedeno (2/3) · Dokazano (pun doprinos). Spremnost je prosjek svih primjenjivih stavki.", muted: true, size: 17 },
-      { h1: "2. Rezultati po poglavljima 4 do 10" },
-      { table: { widths: [900, 5600, 1400, W - 7900], head: ["Pogl.", "Oblast", "Stavki", "Spremnost"], rows: group("clause") } },
-      { h1: "3. Rezultati po temama Aneksa A" },
-      { table: { widths: [900, 5600, 1400, W - 7900], head: ["Tema", "Oblast", "Stavki", "Spremnost"], rows: group("control") } },
-      { h1: "4. Stavke koje traže pažnju" },
+      ...kinds.flatMap(k => [{ h1: `${n++}. Rezultati: ${K[k].title}` }, { table: { widths: [1300, 5200, 1400, W - 7900], head: ["Oznaka", "Oblast", "Stavki", "Spremnost"], rows: group(k) } }]),
+      { h1: `${n++}. Stavke koje traže pažnju` },
       { p: weak.length ? `${weak.length} primjenjivih stavki nije uvedeno ili nije ocijenjeno. Navedene su s nalazom i odgovornom osobom.` : "Sve primjenjive stavke su uvedene ili dokazane." },
-      ...(weak.length ? [{ table: { widths: [900, 2900, 1600, W - 5400 - 1500, 1500], head: ["Oznaka", "Zahtjev / kontrola", "Status", "Nalaz", "Odgovorni"],
+      ...(weak.length ? [{ table: { widths: [1100, 2700, 1600, W - 5400 - 1500, 1500], head: ["Oznaka", "Zahtjev / kontrola", "Status", "Nalaz", "Odgovorni"],
         rows: weak.map(i => [i.code, i.title, stCell(i.status), i.note || "–", i.owner || "–"]) } }] : []),
-      { h1: "5. Detaljni pregled zahtjeva 4 do 10" },
-      { table: { widths: [900, 3000, 1600, W - 5500], head: ["Oznaka", "Zahtjev", "Status", "Nalaz i napomena"], rows: items.filter(i => i.kind === "clause").map(i => [i.code, i.title, stCell(i.status), i.note || ""]) } },
-      { h1: "6. Plan mjera" },
+      { h1: `${n++}. Detaljni pregled: ${K[detailKind].title}` },
+      { table: { widths: [1100, 2800, 1600, W - 5500], head: ["Oznaka", K[detailKind].one, "Status", "Nalaz i napomena"],
+        rows: items.filter(i => i.kind === detailKind).map(i => [i.code, i.title, i.applicable ? stCell(i.status) : { t: "Ne primjenjuje se", color: "8A97A6" }, i.note || i.justification || ""]) } },
+      { h1: `${n++}. Plan mjera` },
       openT.length ? taskTable(openT) : { p: "Nema otvorenih mjera." }
     ] };
-  } else if (kind === "soa") {
+  } else if (kind === "soa" && CAT.soa) {
     const ctr = items.filter(i => i.kind === "control");
     r = { title: "Izjava o primjenjivosti", subtitle: `${pr.client_name} · ${std} · Aneks A`, meta, note, blocks: [
       { p: `Izjava obuhvata ${ctr.length} kontrola Aneksa A. Primjenjivo: ${ctr.filter(i => i.applicable).length}, isključeno: ${ctr.filter(i => !i.applicable).length}. Za svaku kontrolu navedeno je obrazloženje uključenja ili isključenja i status provedbe.` },
-      ...Object.entries(GROUPS.control).flatMap(([g, name]) => [{ h2: `A.${g} ${name}` }, { table: { widths: [800, 2700, 1100, W - 6200, 1600], head: ["Kontrola", "Naziv", "Primjenjiva", "Obrazloženje", "Status"],
+      ...Object.entries(CAT.groups.control).flatMap(([g, name]) => [{ h2: `A.${g} ${name}` }, { table: { widths: [800, 2700, 1100, W - 6200, 1600], head: ["Kontrola", "Naziv", "Primjenjiva", "Obrazloženje", "Status"],
         rows: ctr.filter(i => i.group === g).map(i => [i.code, i.title, i.applicable ? { t: "Da", bold: true } : { t: "Ne", color: "C2410C", bold: true }, i.justification || (i.applicable ? "" : "Obrazloženje nije upisano"), i.applicable ? stCell(i.status) : "–"]) } }]),
       { h2: "Odobrenje" },
       { table: { widths: [3200, 3200, W - 6400], head: ["Uloga", "Ime i prezime", "Datum i potpis"], rows: [["Vlasnik ISMS-a", "", ""], ["Uprava", "", ""]] } }
@@ -235,7 +236,7 @@ export async function report(env, user, pr, kind, items, summary, auditId) {
     for (const x of risks) if (x.likelihood && x.impact && x.status !== "closed") (cellMap[x.likelihood + ":" + x.impact] ||= []).push(R(x.ref));
     const heat = [5, 4, 3, 2, 1].map(l => [{ t: String(l), bold: true, fill: "F1F4F8" }, ...[1, 2, 3, 4, 5].map(i => ({ t: (cellMap[l + ":" + i] || []).join(", ") || " ", fill: LEVEL_FILL[RISK_LEVEL(l * i)] }))]);
     const byLevel = ["critical", "high", "medium", "low"].map(l => [LEVEL_TXT[l], String(risks.filter(x => RISK_LEVEL(x.likelihood * x.impact) === l && x.status !== "closed").length)]);
-    r = { title: "Registar rizika i plan tretmana", subtitle: `${pr.client_name} · ${std} · 6.1.2 i 6.1.3`, meta, note, blocks: [
+    r = { title: "Registar rizika i plan tretmana", subtitle: `${pr.client_name} · ${std}${pr.standard === "iso27001" ? " · 6.1.2 i 6.1.3" : ""}`, meta, note, blocks: [
       { h1: "1. Metodologija" },
       { p: "Rizik se ocjenjuje kao umnožak vjerovatnoće (1 do 5) i uticaja (1 do 5). Nivoi: 1 do 4 nizak, 5 do 9 srednji, 10 do 16 visok, 20 do 25 kritičan. Rizici od nivoa visok naviše se tretiraju planom mjera ili ih vlasnik rizika formalno prihvata. Rezidualni rizik je procjena nakon provedbe planiranih kontrola." },
       { h1: "2. Mapa rizika" },

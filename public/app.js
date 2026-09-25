@@ -183,7 +183,7 @@
         <label class="f">Klijent<select id="p-client" required><option value="">Izaberite…</option>${cs.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}<option value="__new">+ Novi klijent…</option></select></label>
         <div id="newc" hidden class="form card" style="padding:12px"><label class="f">Naziv klijenta<input id="c-name"></label><div class="two"><label class="f">Država<input id="c-country" placeholder="BiH"></label><label class="f">Djelatnost<input id="c-industry"></label></div></div>
         <label class="f">Naziv projekta<input id="p-name" required placeholder="npr. ISO 27001 certifikacija 2027"></label>
-        <label class="f">Standard<select id="p-std">${Object.entries(ME.standards).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></label>
+        <label class="f">Standard<select id="p-std">${Object.entries(ME.standards).map(([k, v]) => `<option value="${k}">${esc(v)} · ${ME.catalogs[k].count} stavki</option>`).join("")}</select></label>
         <div class="two"><label class="f">Rok (audit)<input id="p-deadline" type="date"></label><label class="f">Ko traži<input id="p-req" placeholder="npr. kupac iz Njemačke"></label></div>
         <label class="f">Obim (scope)<textarea id="p-scope" placeholder="Lokacije, procesi, sistemi…"></textarea></label>
         <div class="inline dact"><button class="btn primary" type="submit">Kreiraj projekat</button><button class="btn" type="button" data-close>Odustani</button></div>
@@ -230,13 +230,16 @@
   /* ---------- project ---------- */
   let P = null, ITEMS = [], TASKS = [], EVID = [], RISKS = [], FINDS = [], AUDITS = [];
   const CODE = () => Object.fromEntries(ITEMS.map(i => [i.id, i.code]));
+  const CAT = () => ME.catalogs[P.standard];
   async function loadProject(id) {
     [P, ITEMS, TASKS, EVID, RISKS, FINDS, AUDITS] = await Promise.all(["", "/items", "/tasks", "/evidence", "/risks", "/findings", "/audits"].map(s => api("/projects/" + id + s)));
   }
   async function projectView(id, tab) {
     await loadProject(id);
     const open = TASKS.filter(t => t.status !== "done").length, openF = FINDS.filter(f => f.status !== "closed").length;
-    const tabs = [["pregled", "Pregled"], ["zahtjevi", "Zahtjevi 4–10"], ["kontrole", "Aneks A · SoA"], ["rizici", "Rizici", RISKS.length], ["mjere", "Mjere", open], ["dokazi", "Dokazi", EVID.length], ["audit", "Audit i nalazi", openF], ["izvjestaji", "Izvještaji"], ["aktivnost", "Aktivnost"]];
+    const K = CAT().kinds;
+    if ((tab === "zahtjevi" && !K.clause) || (tab === "kontrole" && !K.control)) tab = "pregled";
+    const tabs = [["pregled", "Pregled"], ...(K.clause ? [["zahtjevi", K.clause.tab]] : []), ...(K.control ? [["kontrole", K.control.tab]] : []), ["rizici", "Rizici", RISKS.length], ["mjere", "Mjere", open], ["dokazi", "Dokazi", EVID.length], ["audit", "Audit i nalazi", openF], ["izvjestaji", "Izvještaji"], ["aktivnost", "Aktivnost"]];
     app.innerHTML = `<div class="phead"><div><div class="crumb"><a href="#/projects">Projekti</a> / ${esc(P.client_name)}</div><h1>${esc(P.name)}</h1>
       <div class="facts"><span>${esc(ME.standards[P.standard])}</span><span>Faza: <b>${esc(PHASES[P.phase] || P.phase)}</b></span>${P.deadline ? `<span>Rok: <b>${fmtDate(P.deadline)}</b></span>` : ""}${P.requester ? `<span>Traži: <b>${esc(P.requester)}</b></span>` : ""}${P.lead ? `<span>Voditelj: <b>${esc(P.lead)}</b></span>` : ""}${deadlineTag(P.deadline)}${P.status !== "active" ? '<span class="tag">Završen</span>' : ""}</div></div>
       <div class="inline"><a class="btn" href="#/p/${P.id}/izvjestaji">${ICON.word} Izvještaji</a><button class="btn" id="pedit">Uredi projekat</button></div></div>
@@ -275,7 +278,8 @@
   /* overview */
   function tabOverview() {
     const s = P.summary, c = P.counters;
-    const bars = kind => s.groups.filter(g => g.kind === kind).map(g => `<div class="bar" style="--c:${kind === "clause" ? "var(--blue)" : "var(--teal)"}"><span class="n">${kind === "clause" ? g.group : "A." + g.group}</span><span>${esc(g.name)}</span><span class="t"><i style="width:${g.pct}%"></i></span><span class="p">${g.pct}%</span></div>`).join("");
+    const K = CAT().kinds;
+    const bars = kind => s.groups.filter(g => g.kind === kind).map(g => `<div class="bar" style="--c:${kind === "clause" ? "var(--blue)" : "var(--teal)"}"><span class="n">${K[kind].gp.replace("Čl. ", "")}${g.group}</span><span>${esc(g.name)}</span><span class="t"><i style="width:${g.pct}%"></i></span><span class="p">${g.pct}%</span></div>`).join("");
     const app_ = ITEMS.filter(i => i.applicable);
     const dist = ST.map(x => ({ ...x, n: app_.filter(i => (i.status == null ? "" : i.status) === x.v).length }));
     const openT = TASKS.filter(t => t.status !== "done").sort((a, b) => (a.due || "9") < (b.due || "9") ? -1 : 1).slice(0, 6);
@@ -285,9 +289,8 @@
       <div class="card big">${ring(s.readiness, "lg")}<p>Spremnost za audit<br><b>${s.assessed} od ${s.applicable}</b> stavki ocijenjeno</p>
         <div style="width:100%"><div class="dist">${dist.map(d => d.n ? `<i style="width:${d.n / app_.length * 100}%;background:${d.c}" title="${d.t}: ${d.n}"></i>` : "").join("")}</div>
         <div class="legend">${dist.map(d => `<span><i style="background:${d.c}"></i>${d.t} ${d.n}</span>`).join("")}</div></div></div>
-      <div class="card bars"><h3>Zahtjevi, poglavlja 4–10</h3>${bars("clause")}</div>
-      <div class="card bars"><h3>Aneks A, teme kontrola</h3>${bars("control")}
-        <p class="faint" style="font-size:12.5px;margin-top:10px">${ITEMS.filter(i => i.kind === "control" && !i.applicable).length} kontrola označeno kao neprimjenjivo.</p></div></div>
+      ${Object.keys(K).map(k => `<div class="card bars${Object.keys(K).length === 1 ? " span2" : ""}"><h3>${esc(K[k].title)}</h3>${bars(k)}
+        ${k === "control" ? `<p class="faint" style="font-size:12.5px;margin-top:10px">${ITEMS.filter(i => i.kind === "control" && !i.applicable).length} kontrola označeno kao neprimjenjivo.</p>` : ""}</div>`).join("")}</div>
       <div class="kpis k6"><div class="card kpi"><b>${EVID.length}</b><span>dokaza priloženo</span></div><div class="card kpi"><b>${c.open_tasks}</b><span>otvorenih mjera</span></div>
       <div class="card kpi ${c.late_tasks ? "warn" : ""}"><b>${c.late_tasks}</b><span>mjera kasni</span></div><div class="card kpi"><b>${RISKS.length}</b><span>rizika u registru</span></div>
       <div class="card kpi ${c.major_findings ? "warn" : ""}"><b>${c.open_findings}</b><span>otvorenih nalaza</span></div><div class="card kpi"><b>${P.deadline ? daysTo(P.deadline) : "–"}</b><span>dana do audita</span></div></div>
@@ -302,11 +305,11 @@
   /* items (clauses or Annex A) */
   let FILT = { q: "", s: "all", g: "all" };
   function tabItems(kind) {
-    const groups = ME.groups[kind];
+    const C = CAT(), groups = C.groups[kind], gp = C.kinds[kind].gp;
     $("#tab").innerHTML = `<div class="tools"><input id="fq" type="search" placeholder="Pretraži oznaku ili naziv…" value="${esc(FILT.q)}">
       <select id="fs"><option value="all">Svi statusi</option>${ST.map(x => `<option value="${x.v === "" ? "none" : x.v}">${x.t}</option>`).join("")}${kind === "control" ? '<option value="na">Neprimjenjivo</option>' : ""}</select>
-      <select id="fg"><option value="all">${kind === "control" ? "Sve teme" : "Sva poglavlja"}</option>${Object.entries(groups).map(([k, v]) => `<option value="${k}">${kind === "control" ? "A." : ""}${k} ${esc(v)}</option>`).join("")}</select>
-      <span class="sp"></span>${kind === "control" ? `<a class="btn" href="/api/projects/${P.id}/report/soa.docx">${ICON.word} SoA (Word)</a>` : `<a class="btn" href="/api/projects/${P.id}/report/gap.docx">${ICON.word} Gap izvještaj</a>`}</div><div id="itbl"></div>`;
+      <select id="fg"><option value="all">Sve oblasti</option>${Object.entries(groups).map(([k, v]) => `<option value="${k}">${gp}${k} ${esc(v)}</option>`).join("")}</select>
+      <span class="sp"></span>${kind === "control" && C.soa ? `<a class="btn" href="/api/projects/${P.id}/report/soa.docx">${ICON.word} SoA (Word)</a>` : `<a class="btn" href="/api/projects/${P.id}/report/gap.docx">${ICON.word} Gap izvještaj</a>`}</div><div id="itbl"></div>`;
     $("#fs").value = FILT.s; if ($("#fs").value !== FILT.s) $("#fs").value = "all";
     $("#fg").value = groups[FILT.g] ? FILT.g : "all";
     const draw = () => {
@@ -316,7 +319,7 @@
         && (FILT.s === "all" || (FILT.s === "na" ? !i.applicable : FILT.s === "none" ? i.status == null && i.applicable : String(i.status) === FILT.s && i.applicable)));
       let last = null, html = "";
       for (const i of rows) {
-        if (i.group !== last) { last = i.group; html += `<tr class="grp"><td colspan="${kind === "control" ? 6 : 5}">${kind === "control" ? "A." : ""}${i.group} · ${esc(groups[i.group])}</td></tr>`; }
+        if (i.group !== last) { last = i.group; html += `<tr class="grp"><td colspan="${kind === "control" ? 6 : 5}">${gp}${i.group} · ${esc(groups[i.group])}</td></tr>`; }
         const st = stOf(i.status);
         const nr = RISKS.filter(r => (r.controls || "").split(",").includes(i.id)).length, nf = FINDS.filter(f => f.item_id === i.id && f.status !== "closed").length;
         html += `<tr class="row ${i.applicable ? "" : "na"}" data-id="${i.id}"><td class="code">${esc(i.code)}</td><td class="ttl"><b>${esc(i.title)}</b><small>${esc(i.note ? i.note.slice(0, 110) : i.hint)}</small></td>
@@ -324,7 +327,7 @@
           <td><span class="st" data-s="${i.status == null ? "" : i.status}"><i></i>${i.applicable ? st.t : "Neprimjenjivo"}</span></td>
           <td class="hide-m">${esc(i.owner)}</td><td><span class="cnt"><span title="Dokazi">${ICON.file}${i.evidence}</span><span title="Otvorene mjere">${ICON.task}${i.tasks.open}</span>${nr ? `<span title="Povezani rizici">${ICON.risk}${nr}</span>` : ""}${nf ? `<span class="red" title="Otvoreni nalazi">${ICON.flag}${nf}</span>` : ""}</span></td></tr>`;
       }
-      $("#itbl").innerHTML = rows.length ? `<table class="tbl"><thead><tr><th>Oznaka</th><th>Naziv</th>${kind === "control" ? '<th class="hide-m">SoA</th>' : ""}<th>Status</th><th class="hide-m">Odgovorni</th><th></th></tr></thead><tbody>${html}</tbody></table>` : '<div class="card empty">Nema stavki za ovaj filter.</div>';
+      $("#itbl").innerHTML = rows.length ? `<table class="tbl"><thead><tr><th>Oznaka</th><th>Naziv</th>${kind === "control" ? `<th class="hide-m">${C.soa ? "SoA" : "Primjena"}</th>` : ""}<th>Status</th><th class="hide-m">Odgovorni</th><th></th></tr></thead><tbody>${html}</tbody></table>` : '<div class="card empty">Nema stavki za ovaj filter.</div>';
       $$("#itbl tr.row").forEach(tr => tr.addEventListener("click", () => itemDrawer(tr.dataset.id)));
     };
     $("#fq").addEventListener("input", e => { FILT.q = e.target.value; draw(); });
@@ -338,10 +341,10 @@
     const ev = EVID.filter(e => e.item_id === id), tk = TASKS.filter(t => t.item_id === id);
     const rk = RISKS.filter(r => (r.controls || "").split(",").includes(id)), fd = FINDS.filter(f => f.item_id === id);
     let status = i.status == null ? "" : i.status;
-    openDrawer(`${dhead(esc(i.title), `${esc(i.code)} · ${i.kind === "clause" ? "Zahtjev" : "Kontrola Aneksa A"}`)}
+    openDrawer(`${dhead(esc(i.title), `${esc(i.code)} · ${esc(CAT().kinds[i.kind].one)}`)}
       <p class="hint">${esc(i.hint)}</p>
-      ${i.kind === "control" ? `<label class="switch"><input type="checkbox" id="i-app" ${i.applicable ? "checked" : ""}> Primjenjiva kontrola (SoA)</label>
-        <label class="f">Obrazloženje za SoA<textarea id="i-just" placeholder="Zašto je kontrola uključena ili isključena…">${esc(i.justification)}</textarea></label>` : ""}
+      ${i.kind === "control" ? `<label class="switch"><input type="checkbox" id="i-app" ${i.applicable ? "checked" : ""}> Primjenjiva kontrola${CAT().soa ? " (SoA)" : ""}</label>
+        <label class="f">Obrazloženje${CAT().soa ? " za SoA" : ""}<textarea id="i-just" placeholder="Zašto je kontrola uključena ili isključena…">${esc(i.justification)}</textarea></label>` : ""}
       <div class="f"><span class="fl">Status</span><div class="seg" id="i-st">${ST.map(x => `<button type="button" data-s="${x.v}" class="${String(x.v) === String(status) ? "on" : ""}"><i></i>${x.t}</button>`).join("")}</div></div>
       <label class="f">Odgovorna osoba<input id="i-owner" value="${esc(i.owner)}" placeholder="npr. IT menadžer klijenta"></label>
       <label class="f">Nalaz i napomena<textarea id="i-note" placeholder="Šta smo zatekli, šta nedostaje, gdje je dokumentovano…">${esc(i.note)}</textarea></label>
@@ -350,7 +353,7 @@
         <form class="inline" id="i-tf" style="margin-top:8px"><input id="i-tt" placeholder="Nova mjera, npr. Izraditi politiku backupa"><input id="i-td" type="date" style="flex:0 0 150px"><button class="btn sm" type="submit">Dodaj</button></form></div>
       <div class="sec"><h3>${ICON.file} Dokazi</h3><div class="list">${ev.map(evLi).join("") || '<p class="muted small">Nema dokaza.</p>'}</div>
         <label class="drop" id="i-drop" style="display:block;margin-top:8px">Prevucite fajl ovdje ili kliknite za upload (do 25 MB)<input type="file" id="i-file" hidden multiple></label></div>
-      ${rk.length || i.kind === "control" ? `<div class="sec"><h3>${ICON.risk} Rizici koje kontrola tretira</h3><div class="list">${rk.map(r => `<a class="li" href="#/p/${P.id}/rizici" data-r="${r.id}"><span class="grow"><b>${R(r.ref)} ${esc(r.asset)}</b><small>${esc(r.threat || "")}</small></span>${lvTag(r.likelihood, r.impact)}</a>`).join("") || '<p class="muted small">Kontrola nije povezana ni s jednim rizikom.</p>'}</div></div>` : ""}
+      ${rk.length || i.kind === "control" ? `<div class="sec"><h3>${ICON.risk} Povezani rizici</h3><div class="list">${rk.map(r => `<a class="li" href="#/p/${P.id}/rizici" data-r="${r.id}"><span class="grow"><b>${R(r.ref)} ${esc(r.asset)}</b><small>${esc(r.threat || "")}</small></span>${lvTag(r.likelihood, r.impact)}</a>`).join("") || '<p class="muted small">Kontrola nije povezana ni s jednim rizikom.</p>'}</div></div>` : ""}
       ${fd.length ? `<div class="sec"><h3>${ICON.flag} Nalazi audita</h3><div class="list">${fd.map(f => `<a class="li" href="#/p/${P.id}/audit"><span class="grow"><b>${N(f.ref)} ${esc(f.title)}</b><small>${FSTAT[f.status]}</small></span>${fkTag(f.kind)}</a>`).join("")}</div></div>` : ""}`, () => refresh());
     $$("#i-st button").forEach(b => b.addEventListener("click", () => { status = b.dataset.s; $$("#i-st button").forEach(x => x.classList.toggle("on", x === b)); }));
     $("#i-save").addEventListener("click", async () => {
@@ -441,7 +444,7 @@
   const scale = (id, labels, v) => `<div class="seg sc" id="${id}">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-v="${n}" class="${+v === n ? "on" : ""}" title="${labels[n]}"><b>${n}</b><small>${labels[n]}</small></button>`).join("")}</div>`;
   function riskDrawer(r) {
     const sel = new Set((r.controls || "").split(",").filter(Boolean));
-    const ctr = ITEMS.filter(i => i.kind === "control").sort((a, b) => sel.has(b.id) - sel.has(a.id));
+    const ctr = ITEMS.filter(i => !CAT().kinds.control || i.kind === "control").sort((a, b) => sel.has(b.id) - sel.has(a.id));
     openDrawer(`${dhead(r.id ? esc(r.asset) : "Novi rizik", r.id ? R(r.ref) + " · Registar rizika" : "Registar rizika")}
       <form class="form" id="rf">
         <label class="f">Imovina ili proces<input id="r-asset" value="${esc(r.asset)}" required placeholder="npr. ERP sistem, podaci o kupcima, server sala"></label>
@@ -451,7 +454,7 @@
           <div class="f"><span class="fl">Vjerovatnoća</span>${scale("r-l", LIK, r.likelihood)}</div><div class="f"><span class="fl">Uticaj</span>${scale("r-i", IMP, r.impact)}</div></div>
         <div class="two"><label class="f">Tretman<select id="r-tr">${Object.entries(TREAT).map(([k, v]) => `<option value="${k}" ${k === (r.treatment || "reduce") ? "selected" : ""}>${v}</option>`).join("")}</select></label>
           <label class="f">Status<select id="r-st">${Object.entries(RSTAT).map(([k, v]) => `<option value="${k}" ${k === (r.status || "open") ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
-        <div class="f"><span class="fl">Kontrole Aneksa A <small class="faint" id="r-cn"></small></span><input id="r-cq" type="search" placeholder="Pretraži kontrole, npr. backup ili 8.13" class="cq">
+        <div class="f"><span class="fl">${CAT().kinds.control ? "Kontrole" : "Zahtjevi"} ${esc(ME.standards[P.standard].split(" (")[0])} <small class="faint" id="r-cn"></small></span><input id="r-cq" type="search" placeholder="Pretraži po oznaci ili nazivu, npr. backup" class="cq">
           <div class="clist" id="r-cl">${ctr.map(i => `<label data-t="${esc((i.code + " " + i.title).toLowerCase())}"><input type="checkbox" value="${i.id}" ${sel.has(i.id) ? "checked" : ""}><span class="code">${esc(i.code)}</span>${esc(i.title)}</label>`).join("")}</div></div>
         <label class="f">Plan tretmana<textarea id="r-plan" placeholder="Šta se radi, do kada, s kojim resursima…">${esc(r.plan)}</textarea></label>
         <div class="rbox"><div class="rhead"><b>Rezidualni rizik nakon tretmana</b><span id="r-rsc"></span></div>
@@ -609,8 +612,8 @@
       <div class="inline" style="margin-top:12px;flex-wrap:wrap">${word ? `<a class="btn primary sm" href="${base}/report/${word}">${ICON.word} Word</a>` : ""}${csv ? `<a class="btn sm" href="${base}/export/${csv}">${ICON.csv} Excel (CSV)</a>` : ""}${extra}</div></div></div>`;
     $("#tab").innerHTML = `<p class="muted" style="margin-bottom:14px">Izvještaji se generišu iz trenutnog stanja projekta, s naslovnom stranom, brojevima stranica i oznakom povjerljivosti. Svako preuzimanje se bilježi u aktivnosti.</p>
       <div class="grid repgrid">
-      ${card("Izvještaj o gap analizi", `Sažetak spremnosti, rezultati po poglavljima i temama Aneksa A, stavke koje traže pažnju i plan mjera. Trenutno ${P.summary.readiness}% spremnosti.`, "gap.docx", "gap.csv")}
-      ${card("Izjava o primjenjivosti (SoA)", `Svih 93 kontrole Aneksa A s obrazloženjem i statusom, po temama, s poljima za odobrenje.`, "soa.docx", "soa.csv")}
+      ${card("Izvještaj o gap analizi", `${esc(ME.standards[P.standard])}: sažetak spremnosti, rezultati po oblastima, stavke koje traže pažnju, detaljni pregled i plan mjera. Trenutno ${P.summary.readiness}% spremnosti.`, "gap.docx", "gap.csv")}
+      ${CAT().soa ? card("Izjava o primjenjivosti (SoA)", `Svih 93 kontrole Aneksa A s obrazloženjem i statusom, po temama, s poljima za odobrenje.`, "soa.docx", "soa.csv") : ""}
       ${card("Registar rizika i plan tretmana", `Metodologija, mapa rizika, registar s inherentnim i rezidualnim nivoom, plan tretmana. ${RISKS.length} rizika u registru.`, "risks.docx", "")}
       ${card("Plan mjera", `Otvorene i završene mjere s odgovornima i rokovima. ${TASKS.filter(t => t.status !== "done").length} otvorenih.`, "tasks.docx", "tasks.csv")}
       ${card("Izvještaj o auditu", AUDITS.length ? "Sažetak, nalazi po vrsti, detalji svakog nalaza s uzrokom i korektivnom mjerom, potpisi." : "Prvo dodajte audit u kartici Audit i nalazi.", "", "",

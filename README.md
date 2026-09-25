@@ -1,12 +1,15 @@
 # Evidenta
 
-Interni radni prostor SCE Assurance za ISO projekte (prva verzija: ISO/IEC 27001:2022).
+Interni radni prostor SCE Assurance za projekte usklađenosti. Katalozi: ISO/IEC 27001:2022, ISO 9001:2026,
+NIS2 (Direktiva EU 2022/2555) i TISAX (VDA ISA 6, modul informacijske sigurnosti, poglavlja 1–7).
 Pregled svih projekata, klijenti, gap analiza (poglavlja 4–10 i Aneks A), Izjava o primjenjivosti,
 registar rizika s mapom rizika (6.1.2, 6.1.3), interni auditi i nalazi s korektivnim mjerama,
 plan mjera, dokazi (R2, EU), pretraga, log aktivnosti, Word izvještaji (.docx) i izvoz u Excel (CSV).
 Svijetla, tamna ili sistemska tema.
 
-Katalog sadrži samo oznake i vlastite kratke opise; tekst ISO standarda nije kopiran.
+Katalozi sadrže samo oznake i vlastite kratke opise; tekst ISO standarda i VDA ISA kataloga nije kopiran
+(`src/catalog.js`, `src/cat-more.js`). Oznake ISO 9001:2026 i VDA ISA provjeriti uz kupljeni standard, odnosno
+zvanični ISA workbook; moduli TISAX za zaštitu prototipova i zaštitu podataka još nisu dodani.
 
 ## Arhitektura
 - Cloudflare Worker (`src/worker.js`) + statički UI (`public/`)

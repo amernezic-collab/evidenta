@@ -133,4 +133,17 @@ export const ISO27001 = [
   A("8.34", "Zaštita sistema tokom audit testiranja", "Audit testovi planirani da ne ometaju rad.")
 ];
 
-export const STANDARDS = { iso27001: { name: "ISO/IEC 27001:2022", items: ISO27001 } };
+import { ISO9001, NIS2, TISAX, MORE_GROUPS } from "./cat-more.js";
+
+/* per standard: groups per kind, labels used in the UI and in reports, whether an SoA applies */
+export const STANDARDS = {
+  iso27001: { name: "ISO/IEC 27001:2022", items: ISO27001, groups: GROUPS, soa: true,
+    kinds: { clause: { tab: "Zahtjevi 4–10", title: "Zahtjevi, poglavlja 4–10", one: "Zahtjev", gp: "" },
+             control: { tab: "Aneks A · SoA", title: "Aneks A, teme kontrola", one: "Kontrola Aneksa A", gp: "A." } } },
+  iso9001: { name: "ISO 9001:2026", items: ISO9001, groups: MORE_GROUPS.iso9001, soa: false,
+    kinds: { clause: { tab: "Zahtjevi 4–10", title: "Zahtjevi, poglavlja 4–10", one: "Zahtjev", gp: "" } } },
+  nis2: { name: "NIS2 (Direktiva EU 2022/2555)", items: NIS2, groups: MORE_GROUPS.nis2, soa: false,
+    kinds: { clause: { tab: "Zahtjevi NIS2", title: "NIS2, oblasti zahtjeva", one: "Zahtjev NIS2", gp: "Čl. " } } },
+  tisax: { name: "TISAX · VDA ISA 6", items: TISAX, groups: MORE_GROUPS.tisax, soa: false,
+    kinds: { control: { tab: "VDA ISA 1–7", title: "VDA ISA, poglavlja 1–7", one: "Kontrola VDA ISA", gp: "" } } }
+};

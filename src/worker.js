@@ -8,7 +8,7 @@
  *   ALLOWED_DOMAINS     optional, comma list of e-mail domains or addresses allowed in addition to Access policy
  *   DEV_USER            local development only (wrangler dev); never set in production
  */
-import { STANDARDS, GROUPS } from "./catalog.js";
+import { STANDARDS } from "./catalog.js";
 import { risksApi, auditsApi, findingsApi, projectCounters, dashboard, search, report } from "./extra.js";
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
@@ -83,7 +83,7 @@ async function projectItems(env, project) {
   const T = Object.fromEntries(tk.results.map(r => [r.item_id, { open: r.open, n: r.n }]));
   return std.items.map(it => {
     const a = A[it.id] || {};
-    return { ...it, status: a.status ?? null, applicable: a.applicable ?? 1, justification: a.justification || "", note: a.note || "",
+    return { ...it, gname: std.groups[it.kind][it.group], status: a.status ?? null, applicable: a.applicable ?? 1, justification: a.justification || "", note: a.note || "",
       owner: a.owner || "", updated_at: a.updated_at || null, updated_by: a.updated_by || null, evidence: E[it.id] || 0, tasks: T[it.id] || { open: 0, n: 0 } };
   });
 }
@@ -91,7 +91,7 @@ function summarize(items) {
   const groups = {};
   let sum = 0, cnt = 0, assessed = 0, applicable = 0;
   for (const it of items) {
-    const g = groups[it.kind + ":" + it.group] ||= { kind: it.kind, group: it.group, name: GROUPS[it.kind][it.group], sum: 0, cnt: 0 };
+    const g = groups[it.kind + ":" + it.group] ||= { kind: it.kind, group: it.group, name: it.gname, sum: 0, cnt: 0 };
     if (!it.applicable) continue;
     applicable++;
     const w = it.status == null ? 0 : WEIGHT[it.status];
@@ -125,7 +125,8 @@ async function api(req, env, url, user) {
   const p = url.pathname.replace(/^\/api/, "").split("/").filter(Boolean);
   const m = req.method;
 
-  if (p[0] === "me") return json({ email: user, standards: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, v.name])), groups: GROUPS });
+  if (p[0] === "me") return json({ email: user, standards: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, v.name])),
+    catalogs: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, { kinds: v.kinds, groups: v.groups, soa: v.soa, count: v.items.length }])) });
 
   if (p[0] === "dashboard" && m === "GET") {
     const rows = (await env.DB.prepare("SELECT p.*, c.name client_name FROM projects p JOIN clients c ON c.id=p.client_id WHERE p.status='active' ORDER BY p.deadline IS NULL, p.deadline").all()).results;
@@ -250,7 +251,7 @@ async function api(req, env, url, user) {
       const items = await projectItems(env, pr);
       const safe = (pr.client_name + "_" + pr.name).replace(/[^\w\-]+/g, "_").slice(0, 60);
       let rows, fname;
-      if (p[3] === "soa.csv") {
+      if (p[3] === "soa.csv" && STANDARDS[pr.standard].soa) {
         rows = [["Kontrola", "Naziv", "Primjenjiva", "Obrazloženje", "Status", "Odgovorni", "Broj dokaza"]]
           .concat(items.filter(i => i.kind === "control").map(i => [i.code, i.title, i.applicable ? "Da" : "Ne", i.justification, STATUS_TXT[i.status], i.owner, i.evidence]));
         fname = `SoA_${safe}.csv`;
