@@ -43,6 +43,9 @@
     org: svg('<rect x="2.5" y="2" width="7" height="12" rx="1.5"/><path d="M9.5 6h4v8h-4M5 5h2M5 8h2M5 11h2"/>'),
     shield: svg('<path d="M8 1.5l5.5 2v4.2c0 3.3-2.3 5.8-5.5 6.8-3.2-1-5.5-3.5-5.5-6.8V3.5z"/><path d="M5.6 8l1.7 1.7L10.6 6.4"/>'),
     dl: svg('<path d="M8 2v8M4.8 7L8 10.2 11.2 7M2.5 13.5h11"/>'),
+    invoice: svg('<path d="M3.5 1.5h9v13l-2-1.2-2.5 1.2-2.5-1.2-2 1.2z"/><path d="M6 5h4M6 8h4M6 11h2"/>'),
+    gear: svg('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>'),
+    check: svg('<path d="M3 8.5l3 3 7-7"/>'),
     cal: svg('<rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/>')
   };
   let ME = null;
@@ -67,11 +70,15 @@
       let e = {}; try { e = await r.json(); } catch (x) {}
       if (r.status === 401 && e.error === "mfa") { if (ME) ME.mfa.ok = false; mfaView(); throw new Error("mfa"); }
       if (r.status === 403 && !e.error) { toast("Sesija je istekla. Osvježite stranicu."); throw new Error("403"); }
-      toast(ERR[e.error] || "Greška: " + (e.error || r.status)); throw new Error(e.error || r.status);
+      if (!opt.quiet) toast(ERR[e.error] || "Greška: " + (e.error || r.status));
+      throw Object.assign(new Error(e.error || r.status), { data: e });
     }
     return r.json();
   }
-  const ERR = { download_not_approved: "Preuzimanje još nije odobreno. Zatražite odobrenje od administratora.", read_only: "Imate pristup samo za pregled.", admin_only: "Samo administrator.", other_client: "Korisnik klijenta može biti dodan samo na projekte svoje firme.", code: "Kod nije ispravan.", locked: "Previše pogrešnih pokušaja. Pokušajte ponovo za 15 minuta.", user_not_active: "Korisnik nije aktivan." };
+  const ERR = { download_not_approved: "Preuzimanje još nije odobreno. Zatražite odobrenje od administratora.", read_only: "Imate pristup samo za pregled.", admin_only: "Samo administrator.", other_client: "Korisnik klijenta može biti dodan samo na projekte svoje firme.", code: "Kod nije ispravan.", locked: "Previše pogrešnih pokušaja. Pokušajte ponovo za 15 minuta.", user_not_active: "Korisnik nije aktivan.", invalid: "Provjerite označena polja.",
+    issuer_incomplete: "Prvo popunite podatke SCE Assurance u Postavkama.", client_incomplete: "Klijentu nedostaju podaci za fakturu.", no_items: "Faktura nema nijednu stavku.",
+    zero_total: "Iznos fakture mora biti veći od nule.", not_pdf: "Datoteka nije PDF.", no_signature: "U PDF-u nije pronađen digitalni potpis. Potpišite PDF certifikatom pa ga učitajte.",
+    too_large: "Datoteka je prevelika.", vies_unavailable: "VIES servis EU trenutno nije dostupan.", vies_input: "Za VIES provjeru unesite EU PDV broj.", not_draft: "Izdana faktura se ne može mijenjati.", numbering: "Broj fakture nije dodijeljen, pokušajte ponovo.", pdf_failed: "PDF nije napravljen. Faktura je ostala nacrt." };
   function toast(t) { const el = $("#toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("on"), 2600); }
   const pad = n => String(n).padStart(2, "0");
   const fmtDate = d => { if (!d) return ""; const x = /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + "T00:00:00") : new Date(d); return `${pad(x.getDate())}.${pad(x.getMonth() + 1)}.${x.getFullYear()}.`; };
@@ -149,8 +156,11 @@
   async function loadNav(force) {
     if (!NAV || force) {
       const admin = ME.user.kind === "admin";
-      const [cs, ps, reqs, us] = await Promise.all([api("/clients"), api("/projects"), admin ? api("/download-requests") : [], admin ? api("/users") : []]);
-      NAV = { cs, ps, reqs, us, pending: us.filter(u => u.kind === "pending").length };
+      const client = ME.user.kind === "client";
+      const [cs, ps, reqs, us, iss, invs] = await Promise.all([api("/clients"), api("/projects"), admin ? api("/download-requests") : [], admin ? api("/users") : [],
+        admin ? api("/settings/issuer") : null, client ? api("/invoices").catch(() => []) : []]);
+      NAV = { cs, ps, reqs, us, pending: us.filter(u => u.kind === "pending").length, issuerMissing: iss ? iss.missing.length : 0,
+        invNew: client ? invs.filter(i => i.status === "shared").length : 0 };
     }
     return NAV;
   }
@@ -163,6 +173,8 @@
     $("#snav").innerHTML = `<a href="#/" class="top1${!CUR.client && !CUR.view ? " on" : ""}">${ICON.home}Pregled</a>
       ${staff() ? `<a href="#/clients" class="top1${CUR.view === "clients" ? " on" : ""}">${ICON.org}Klijenti<small>${cs.length}</small></a>` : ""}
       ${admin ? `<a href="#/users" class="top1${CUR.view === "users" ? " on" : ""}">${ICON.users}Korisnici${nreq + npend ? `<em class="badge">${nreq + npend}</em>` : ""}</a>` : ""}
+      ${admin || ME.user.kind === "client" ? `<a href="#/invoices" class="top1${CUR.view === "invoices" ? " on" : ""}">${ICON.invoice}Fakture${NAV.invNew ? `<em class="badge">${NAV.invNew}</em>` : ""}</a>` : ""}
+      ${admin ? `<a href="#/settings" class="top1${CUR.view === "settings" ? " on" : ""}">${ICON.gear}Postavke${NAV.issuerMissing ? '<em class="dot" title="Podaci za fakture nisu popunjeni"></em>' : ""}</a>` : ""}
       <a href="#/account" class="top1${CUR.view === "account" ? " on" : ""}">${ICON.shield}Moj nalog${ME.mfa.enabled ? "" : ME.user.kind === "client" ? "" : '<em class="dot" title="MFA nije uključen"></em>'}</a>
       <div class="sgrp"><span>${staff() ? "Projekti po klijentu" : "Moji projekti"}</span></div>
       ${cs.map(c => { const cp = ps.filter(p => p.client_id === c.id), isOpen = open === c.id;
@@ -195,6 +207,8 @@
       if (h[0] === "projects") return projectsView();
       if (h[0] === "users") return usersView(h[1]);
       if (h[0] === "account") return accountView();
+      if (h[0] === "invoices") return h[1] ? invoicesView(h[1]) : invoicesView();
+      if (h[0] === "settings") return settingsView();
       if (h[0] === "c" && h[1]) return clientView(h[1]);
       if (h[0] === "p" && h[1]) return projectView(h[1], h[2] || "pregled", h[3]);
       return homeView();
@@ -306,7 +320,7 @@
     openDrawer(`${dhead("Novi projekat")}<p class="muted" style="margin-top:-8px">Katalog zahtjeva se automatski učitava prema standardu. Vi dobijate pravo uređivanja, a ostale članove dodaje administrator.</p>
       <form class="form" id="pf">
         <label class="f">Klijent<select id="p-client" required><option value="">Izaberite…</option>${cs.map(c => `<option value="${c.id}" ${c.id === clientId ? "selected" : ""}>${esc(c.name)}</option>`).join("")}<option value="__new">+ Novi klijent…</option></select></label>
-        <div id="newc" hidden class="form card" style="padding:12px"><label class="f">Naziv klijenta<input id="c-name"></label><div class="two"><label class="f">Država<input id="c-country" placeholder="BiH"></label><label class="f">Djelatnost<input id="c-industry"></label></div></div>
+        <div id="newc" hidden class="form card" style="padding:12px"><label class="f">Naziv klijenta<input id="c-name"></label><div class="two"><label class="f">Država<select id="c-country">${countryOpts("BA")}</select></label><label class="f">Djelatnost<input id="c-industry"></label></div><p class="faint small">Pravne podatke za fakturu (ID, PDV, adresa) dopunite kasnije na stranici klijenta.</p></div>
         <label class="f">Naziv projekta<input id="p-name" required placeholder="npr. ISO 27001 certifikacija 2027"></label>
         <label class="f">Standard<select id="p-std">${Object.entries(ME.standards).map(([k, v]) => `<option value="${k}">${esc(v)} · ${ME.catalogs[k].count} stavki</option>`).join("")}</select></label>
         <div class="two"><label class="f">Rok (audit)<input id="p-deadline" type="date"></label><label class="f">Ko traži<input id="p-req" placeholder="npr. kupac iz Njemačke"></label></div>
@@ -320,7 +334,7 @@
       if (!client || !val("p-name").trim()) return toast("Izaberite klijenta i upišite naziv.");
       if (client === "__new") {
         if (!val("c-name").trim()) return toast("Upišite naziv klijenta.");
-        client = (await api("/clients", { method: "POST", body: { name: val("c-name"), country: val("c-country"), industry: val("c-industry") } })).id;
+        client = (await api("/clients", { method: "POST", body: { name: val("c-name"), country_code: val("c-country"), industry: val("c-industry") } })).id;
       }
       const r = await api("/projects", { method: "POST", body: { client_id: client, name: val("p-name"), standard: val("p-std"), deadline: val("p-deadline"), requester: val("p-req"), scope: val("p-scope") } });
       NAV = null; closeDrawer(); location.hash = "#/p/" + r.id;
@@ -356,35 +370,115 @@
     app.innerHTML = `<div class="hero"><div><span class="eyebrow">Klijent</span><h1>${esc(c.name)}</h1><p>${esc([c.country, c.industry].filter(Boolean).join(" · ")) || "&nbsp;"}</p></div>
       ${staff() ? '<div class="inline"><button class="btn light" id="ce">Uredi klijenta</button><button class="btn accent" id="np">+ Novi projekat</button></div>' : ""}</div>
       <div class="cinfo">
-        <div class="card"><h3>Kontakt</h3><p>${esc(c.contact_name || "–")}<br><span class="muted">${esc(c.contact_email || "")}</span></p></div>
+        <div class="card"><h3>Kontakt osoba</h3><p>${esc(c.contact_name || "–")}<br><span class="muted">${esc([c.contact_email, c.contact_phone].filter(Boolean).join(" · "))}</span></p></div>
         <div class="card"><h3>Projekti</h3><p><b>${ps.length}</b> <span class="muted">ukupno, ${ps.filter(p => p.status === "active").length} aktivnih</span></p></div>
         <div class="card"><h3>Prosječna spremnost</h3><p><b>${ps.length ? Math.round(ps.reduce((a, p) => a + p.readiness, 0) / ps.length) : 0}%</b></p></div>
         ${c.notes ? `<div class="card span2"><h3>Napomene</h3><p class="muted">${esc(c.notes)}</p></div>` : ""}</div>
+      ${staff() ? `<div style="margin-top:14px">${legalCard(c)}</div>` : ""}
       <div class="head sm" style="margin-top:22px"><h2>Projekti</h2></div>
       ${ps.length ? `<div class="grid pgrid">${ps.map(pcard).join("")}</div>` : '<div class="card empty small">Još nema projekata za ovog klijenta.</div>'}
+      ${admin ? `<div class="head sm" style="margin-top:22px"><h2>Fakture</h2><button class="btn sm" id="ninv">+ Nova faktura</button></div><div id="cinv"><p class="muted small">Učitavam…</p></div>` : ""}
       ${admin ? `<div class="head sm" style="margin-top:22px"><h2>Korisnici klijenta</h2><button class="btn sm" id="addu">+ Dodaj korisnika klijenta</button></div>
         <div class="card flush"><div class="list plain">${cus.map(urow).join("") || '<p class="muted small pad-s">Još nema korisnika iz ove firme.</p>'}</div></div>
         <p class="faint small" style="margin-top:8px">Korisnici klijenta vide samo projekte na koje su dodani, uvijek uz dvostruku provjeru. Preuzimanje odobravate po projektu, u sekciji Pristup.</p>` : ""}`;
     $("#ce") && $("#ce").addEventListener("click", () => clientForm(c));
     $("#np") && $("#np").addEventListener("click", () => newProject(c.id));
     const cs = admin ? await api("/clients") : [];
+    if (admin) {
+      $("#ninv").addEventListener("click", () => invoiceEditor({ client_id: id }));
+      api("/invoices").then(list => { const mine = list.filter(i => i.client_id === id); $("#cinv").innerHTML = mine.length ? invTable(mine, false) : '<div class="card empty small">Još nema faktura za ovog klijenta.</div>'; bindInvRows(); });
+    }
     $("#addu") && $("#addu").addEventListener("click", () => userForm({ kind: "client", client_id: id }, cs, () => clientView(id)));
     $$(".urow").forEach(r => r.addEventListener("click", () => userForm(cus.find(u => u.email === r.dataset.e), cs, () => clientView(id))));
   }
-  function clientForm(c = {}) {
-    openDrawer(`${dhead(c.id ? "Uredi klijenta" : "Novi klijent")}
-      <form class="form" id="cf"><label class="f">Naziv<input id="c-name" value="${esc(c.name)}" required></label>
-      <div class="two"><label class="f">Država<input id="c-country" value="${esc(c.country)}"></label><label class="f">Djelatnost<input id="c-industry" value="${esc(c.industry)}"></label></div>
-      <div class="two"><label class="f">Kontakt osoba<input id="c-cn" value="${esc(c.contact_name)}"></label><label class="f">E-mail kontakta<input id="c-ce" type="email" value="${esc(c.contact_email)}"></label></div>
-      <label class="f">Napomene<textarea id="c-notes">${esc(c.notes)}</textarea></label>${actions(false)}</form>`);
-    $("#cf").addEventListener("submit", async e => {
+  /* ---------- client form with legal-entity data and validation ---------- */
+  const EVV = window.EVV;
+  const countryOpts = sel => EVV.COUNTRIES.map(([k, n]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
+  function fld(k, label, o = {}) {
+    const f = EVV.FIELDS[k] || {}, req = o.required ?? f.required, inv = o.invoice ?? f.invoice;
+    const input = o.textarea ? `<textarea id="cf-${k}" name="${k}" ${req ? "required" : ""} maxlength="${f.max || 200}">${esc(o.value)}</textarea>`
+      : `<input id="cf-${k}" name="${k}" value="${esc(o.value)}" type="${o.type || "text"}" ${o.inputmode ? `inputmode="${o.inputmode}"` : ""} ${o.auto ? `autocomplete="${o.auto}"` : ""} ${req ? "required" : ""} maxlength="${f.max || 200}" placeholder="${esc(o.ph || "")}" spellcheck="false">`;
+    return `<label class="f vf${o.cls ? " " + o.cls : ""}" data-k="${k}"><span class="fl">${esc(label || f.label)}${req ? '<b class="req" title="Obavezno">*</b>' : ""}${inv ? '<i class="forinv" title="Potrebno za izdavanje fakture">za fakturu</i>' : ""}</span>${input}<small class="hint" id="h-${k}">${esc(o.hint || "")}</small><small class="ferr" id="e-${k}"></small></label>`;
+  }
+  function clientForm(c = {}, after) {
+    const cc = c.country_code || "BA", R = EVV.rules(cc);
+    openDrawer(`${dhead(c.id ? "Uredi klijenta" : "Novi klijent", "Klijent")}
+      <p class="legend2"><span><b class="req">*</b> obavezno za spremanje</span><span><i class="forinv">za fakturu</i> potrebno prije izdavanja fakture</span></p>
+      <form class="form vform" id="cf" novalidate>
+        <div class="fsec"><h3>Osnovno</h3>
+          <div class="two">${fld("name", "Kratki naziv (u aplikaciji)", { value: c.name, ph: "npr. Primjer" })}<label class="f vf" data-k="country_code"><span class="fl">Država<b class="req">*</b></span><select id="cf-country_code" required>${countryOpts(cc)}</select><small class="hint"></small><small class="ferr" id="e-country_code"></small></label></div>
+          ${fld("legal_name", "Puni pravni naziv (kao u sudskom registru)", { value: c.legal_name, ph: "npr. Primjer d.o.o. Sarajevo" })}
+          ${fld("industry", null, { value: c.industry, ph: "npr. proizvodnja, IT usluge" })}</div>
+        <div class="fsec"><h3>Pravni podaci <span class="vies" id="vies-w" hidden><button class="btn sm" type="button" id="vies">Provjeri PDV broj u VIES (EU)</button></span></h3>
+          <div class="two">${fld("id_number", R.idLabel, { value: c.id_number, hint: R.id[1], inputmode: cc === "BA" || cc === "HR" || cc === "RS" ? "numeric" : "text" })}${fld("vat_number", R.vatLabel, { value: c.vat_number, hint: R.vat[1] + ", ako je u sistemu PDV-a" })}</div>
+          ${fld("court_reg", "Registracija (sud i broj upisa)", { value: c.court_reg, ph: cc === "BA" ? "npr. Općinski sud u Sarajevu, MBS 65-01-0000-00" : "npr. Handelsgericht Wien, FN 123456 a" })}</div>
+        <div class="fsec"><h3>Adresa sjedišta</h3>
+          ${fld("address", null, { value: c.address, ph: "npr. Zmaja od Bosne 7", auto: "street-address" })}
+          <div class="two">${fld("postal_code", null, { value: c.postal_code, hint: R.zip[1], inputmode: "numeric", auto: "postal-code" })}${fld("city", null, { value: c.city, auto: "address-level2" })}</div></div>
+        <div class="fsec"><h3>Kontakt firme</h3>
+          <div class="two">${fld("email", null, { value: c.email, type: "email", ph: "info@firma.ba", auto: "email" })}${fld("invoice_email", null, { value: c.invoice_email, type: "email", ph: "racunovodstvo@firma.ba", hint: "Ako je prazno, koristi se e-mail firme." })}</div>
+          <div class="two">${fld("phone", null, { value: c.phone, type: "tel", ph: "+387 33 123 456", inputmode: "tel", auto: "tel" })}${fld("website", null, { value: c.website, ph: "www.firma.ba", type: "text", inputmode: "url" })}</div>
+          ${fld("iban", "IBAN (za povrat ili kompenzaciju)", { value: c.iban, ph: "BA39 1290 0794 0102 8494", hint: "Provjerava se kontrolni broj." })}</div>
+        <div class="fsec"><h3>Kontakt osoba</h3>
+          ${fld("contact_name", null, { value: c.contact_name, auto: "name" })}
+          <div class="two">${fld("contact_email", null, { value: c.contact_email, type: "email", auto: "email" })}${fld("contact_phone", null, { value: c.contact_phone, type: "tel", ph: "+387 61 123 456", inputmode: "tel" })}</div></div>
+        <div class="fsec">${fld("notes", null, { value: c.notes, textarea: true })}</div>
+        <div class="completeness" id="compl"></div>
+        ${actions(false)}</form>`);
+    $(".dpanel").classList.add("wide");
+    const form = $("#cf"), touched = new Set();
+    const read = () => Object.fromEntries([...Object.keys(EVV.FIELDS)].map(k => [k, ($("#cf-" + k) || {}).value || ""]));
+    function render(all, extra = {}) {
+      const r = EVV.checkClient(read()), errs = { ...r.errors, ...extra };
+      $$(".vf", form).forEach(l => { const k = l.dataset.k, e = (all || touched.has(k)) && errs[k]; l.classList.toggle("bad", !!e); l.classList.toggle("ok", !e && touched.has(k) && !!(($("#cf-" + k) || {}).value)); const el = $("#e-" + k); if (el) el.textContent = e || ""; });
+      const need = Object.entries(EVV.FIELDS).filter(([, f]) => f.invoice), done = need.length - r.missingForInvoice.length;
+      $("#compl").innerHTML = `<div class="cbar"><i style="width:${Math.round(done / need.length * 100)}%"></i></div><span>${done === need.length ? `${ICON.check} Svi podaci za fakturu su popunjeni.` : `Za fakturu nedostaje: <b>${esc(r.missingForInvoice.join(", "))}</b>`}</span>`;
+      return r;
+    }
+    function relabel() {
+      const cc = $("#cf-country_code").value, R = EVV.rules(cc);
+      $('[data-k="id_number"] .fl').firstChild.textContent = R.idLabel; $("#h-id_number").textContent = R.id[1];
+      $('[data-k="vat_number"] .fl').firstChild.textContent = R.vatLabel; $("#h-vat_number").textContent = R.vat[1] + ", ako je u sistemu PDV-a";
+      $("#h-postal_code").textContent = R.zip[1];
+      $("#vies-w").hidden = !EVV.EU.includes(cc);
+    }
+    form.addEventListener("input", e => { const k = e.target.name || (e.target.id || "").replace("cf-", ""); if (touched.has(k)) render(false); });
+    form.addEventListener("focusout", e => {
+      const k = (e.target.id || "").replace("cf-", ""); if (!k || !EVV.FIELDS[k]) return;
+      touched.add(k); const r = render(false);
+      if (!r.errors[k] && e.target.value && ["phone", "contact_phone", "iban", "website", "id_number", "vat_number", "email", "invoice_email", "contact_email"].includes(k)) e.target.value = r.value[k];
+    });
+    $("#cf-country_code").addEventListener("change", () => { relabel(); render(false); });
+    relabel(); if (c.id) { Object.keys(EVV.FIELDS).forEach(k => c[k] && touched.add(k)); render(false); } else render(false);
+    $("#vies").addEventListener("click", async () => {
+      const cc = $("#cf-country_code").value, n = $("#cf-vat_number").value;
+      const btn = $("#vies"); btn.disabled = true; btn.textContent = "Provjeravam…";
+      try {
+        const r = await api(`/vies?cc=${cc}&n=${encodeURIComponent(n)}`);
+        if (!r.valid) toast("VIES: PDV broj nije aktivan ili ne postoji.");
+        else { if (r.name && !$("#cf-legal_name").value) $("#cf-legal_name").value = r.name; if (r.address && !$("#cf-address").value) $("#cf-address").value = r.address.split("\n")[0]; toast("VIES: PDV broj je važeći" + (r.name ? " · " + r.name : "")); render(false); }
+      } catch (e) {} finally { btn.disabled = false; btn.textContent = "Provjeri PDV broj u VIES (EU)"; }
+    });
+    form.addEventListener("submit", async e => {
       e.preventDefault();
-      const b = { name: val("c-name"), country: val("c-country"), industry: val("c-industry"), contact_name: val("c-cn"), contact_email: val("c-ce"), notes: val("c-notes") };
-      if (!b.name.trim()) return;
-      const r = await api(c.id ? "/clients/" + c.id : "/clients", { method: c.id ? "PUT" : "POST", body: b });
-      toast("Sačuvano"); NAV = null; closeDrawer(); location.hash = "#/c/" + (c.id || r.id); if (c.id) route();
+      const r = render(true);
+      if (Object.keys(r.errors).length) { const f = $(".vf.bad input, .vf.bad select", form); f && f.focus(); return toast("Provjerite označena polja."); }
+      try {
+        const res = await api(c.id ? "/clients/" + c.id : "/clients", { method: c.id ? "PUT" : "POST", body: r.value, quiet: true });
+        toast(r.missingForInvoice.length ? "Sačuvano. Za fakturu još nedostaju neki podaci." : "Sačuvano"); NAV = null; closeDrawer();
+        if (after) return after(c.id || res.id);
+        location.hash = "#/c/" + (c.id || res.id); if (c.id) route();
+      } catch (x) { if (x.data && x.data.fields) { render(true, x.data.fields); toast("Provjerite označena polja."); } else toast(ERR[x.message] || "Greška: " + x.message); }
     });
   }
+  const legalCard = c => {
+    const chk = EVV.checkClient(c), R = EVV.rules(c.country_code), cn = (EVV.COUNTRIES.find(x => x[0] === c.country_code) || [])[1] || c.country || "";
+    const row = (k, v) => v ? `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>` : "";
+    return `<div class="card legal"><div class="lh"><h3>${ICON.org} Pravni podaci</h3>${chk.missingForInvoice.length ? `<span class="tag orange">Za fakturu nedostaje ${chk.missingForInvoice.length}</span>` : `<span class="tag teal">${ICON.check} Spremno za fakturu</span>`}</div>
+      <dl>${row("Puni naziv", c.legal_name)}${row("Adresa", [c.address, [c.postal_code, c.city].filter(Boolean).join(" "), cn].filter(Boolean).join(", "))}${row(R.idLabel, c.id_number)}${row(R.vatLabel, c.vat_number)}${row("Registracija", c.court_reg)}
+      ${row("E-mail", c.email)}${row("E-mail za fakture", c.invoice_email)}${row("Telefon", c.phone)}${row("Web", c.website)}${row("IBAN", c.iban)}</dl>
+      ${chk.missingForInvoice.length ? `<p class="small muted" style="margin-top:8px">Nedostaje: ${esc(chk.missingForInvoice.join(", "))}.</p>` : ""}</div>`;
+  };
 
   /* ---------- users and access (admin) ---------- */
   const UTABS = [["tim", "Tim"], ["klijenti", "Korisnici klijenata"], ["cekanje", "Na čekanju"], ["zahtjevi", "Zahtjevi za preuzimanje"]];
@@ -444,6 +538,208 @@
       await api("/users" + (u.email ? "/" + encodeURIComponent(u.email) : ""), { method: u.email ? "PUT" : "POST", body: { email: val("u-e"), name: val("u-n"), org: val("u-o"), kind: val("u-k"), client_id: val("u-c"), mfa_required: $("#u-m").checked } });
       toast("Sačuvano"); closeDrawer(); NAV = null; await loadNav(); (after || (() => usersView(location.hash.split("/")[2])))();
     });
+  }
+
+  /* ---------- settings: issuer data for invoices (admin) ---------- */
+  async function settingsView() {
+    setCrumb([["Postavke"]]);
+    const s = await api("/settings/issuer"), I = EVV.ISSUER;
+    const f = (k, o = {}) => `<label class="f vf" data-k="${k}"><span class="fl">${esc(o.label || I[k].label)}${I[k].required ? '<b class="req">*</b>' : ""}</span>${o.select ? `<select id="is-${k}">${o.select}</select>` : `<input id="is-${k}" value="${esc(s[k])}" type="${o.type || "text"}" placeholder="${esc(o.ph || "")}" ${o.inputmode ? `inputmode="${o.inputmode}"` : ""} spellcheck="false">`}<small class="hint">${esc(o.hint || "")}</small><small class="ferr" id="ie-${k}"></small></label>`;
+    app.innerHTML = `<div class="hero sm"><div><span class="eyebrow">Postavke</span><h1>Podaci SCE Assurance za fakture</h1><p>Ovi podaci se ispisuju u zaglavlju (memorandumu), podnožju i podacima za plaćanje na svakoj fakturi. Izdane fakture čuvaju podatke kakvi su bili u trenutku izdavanja.</p></div></div>
+      ${s.missing.length ? `<div class="dlbar">${ICON.lock}<div class="grow"><b>Fakture se ne mogu izdati dok ne popunite obavezne podatke</b><small>Nedostaje: ${esc(s.missing.join(", "))}. Nacrte i pregled PDF-a možete raditi i prije toga.</small></div></div>` : ""}
+      <form class="form vform setform" id="sf" novalidate>
+        <div class="card fsec"><h3>Firma</h3>
+          <div class="three">${f("name", { ph: "SCE Assurance" })}${f("legal_form", { ph: "d.o.o." })}${f("country_code", { select: countryOpts(s.country_code) })}</div>
+          <div class="three">${f("address")}${f("postal_code", { inputmode: "numeric" })}${f("city")}</div>
+          <div class="three">${f("id_number", { hint: "13 cifara za BiH", inputmode: "numeric" })}${f("vat_number", { hint: "12 cifara, ako je firma u sistemu PDV-a", inputmode: "numeric" })}${f("court_reg", { ph: "Općinski sud u Sarajevu, MBS …" })}</div>
+          <label class="chk"><input type="checkbox" id="is-vat_payer" ${s.vat_payer ? "checked" : ""}><span><b>Firma je u sistemu PDV-a</b><small>Ako nije, na fakturi se ne obračunava PDV i ispisuje se napomena da izdavalac nije u sistemu PDV-a.</small></span></label></div>
+        <div class="card fsec"><h3>Kontakt</h3><div class="three">${f("email", { type: "email" })}${f("phone", { type: "tel", ph: "+387 …" })}${f("website", { ph: "sceassurance.com" })}</div></div>
+        <div class="card fsec"><h3>Banka</h3><div class="three">${f("bank")}${f("iban", { hint: "Provjerava se kontrolni broj." })}${f("swift", { ph: "8 ili 11 znakova" })}</div></div>
+        <div class="card fsec"><h3>Fakture</h3>
+          <div class="three">${f("prefix", { hint: "Broj: PREFIKS-GODINA-0001" })}${f("place")}${f("currency", { select: ["BAM", "EUR"].map(c => `<option ${c === s.currency ? "selected" : ""}>${c}</option>`).join("") })}</div>
+          <div class="three">${f("due_days", { type: "number", inputmode: "numeric" })}${f("vat_rate", { type: "number", hint: "Za BiH 17%, ako je firma u sistemu PDV-a" })}<span></span></div>
+          <div class="two">${f("signer_name")}${f("signer_title", { ph: "npr. Direktor" })}</div>
+          ${f("footer", { ph: "npr. Hvala na povjerenju." })}</div>
+        <div class="inline"><button class="btn primary" type="submit">Sačuvaj postavke</button></div>
+      </form>`;
+    const read = () => ({ ...Object.fromEntries(Object.keys(I).map(k => [k, ($("#is-" + k) || {}).value || ""])), vat_payer: $("#is-vat_payer").checked });
+    const show = errs => $$("#sf .vf").forEach(l => { const k = l.dataset.k, e = errs[k]; l.classList.toggle("bad", !!e); $("#ie-" + k).textContent = e || ""; });
+    $("#sf").addEventListener("focusout", () => show(EVV.checkIssuer(read()).errors));
+    $("#sf").addEventListener("submit", async e => {
+      e.preventDefault(); const c = EVV.checkIssuer(read()); show(c.errors);
+      if (Object.keys(c.errors).length) return toast("Provjerite označena polja.");
+      try { const r = await api("/settings/issuer", { method: "PUT", body: read(), quiet: true }); toast(r.missing.length ? "Sačuvano. Još nedostaje: " + r.missing.join(", ") : "Sačuvano. Fakture se mogu izdavati."); NAV = null; route(); }
+      catch (x) { if (x.data && x.data.fields) { show(x.data.fields); toast("Provjerite označena polja."); } }
+    });
+  }
+
+  /* ---------- invoices ---------- */
+  const INV_ST = { draft: ["Nacrt", ""], issued: ["Izdana", "blue"], shared: ["Poslana klijentu", "orange"], paid: ["Plaćena", "teal"], cancelled: ["Stornirana", "red"] };
+  const CURS = { BAM: "KM", EUR: "EUR" };
+  const num2 = n => { const neg = n < 0, a = Math.round(Math.abs(n) * 100), i = String(Math.floor(a / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, "."); return (neg ? "-" : "") + i + "," + String(a % 100).padStart(2, "0"); };
+  const money = (minor, cur) => num2(minor / 100) + (cur ? " " + (CURS[cur] || cur) : "");
+  const invStatus = i => { const [t, c] = INV_ST[i.status] || [i.status, ""]; const late = ["issued", "shared"].includes(i.status) && daysTo(i.due_date) < 0; return `<span class="tag ${late ? "red" : c}">${late ? "Dospjela" : t}</span>`; };
+  const parseAmount = s => { s = String(s || "").replace(/\s|KM|EUR/gi, ""); if (s.includes(",") && s.includes(".")) s = s.lastIndexOf(",") > s.lastIndexOf(".") ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, ""); else s = s.replace(",", "."); const n = parseFloat(s); return isFinite(n) ? n : 0; };
+  const invTable = (list, withClient = true) => `<table class="tbl invt"><thead><tr><th>Broj</th>${withClient ? "<th>Klijent</th>" : ""}<th class="hide-m">Datum</th><th class="hide-m">Rok</th><th class="num">Iznos</th><th>Status</th></tr></thead><tbody>
+    ${list.map(i => `<tr class="row" data-inv="${i.id}"><td class="ttl"><b>${esc(i.number || "Nacrt")}</b>${i.signed_at ? `<small>${ICON.shield} kvalifikovano potpisana</small>` : ""}</td>${withClient ? `<td>${esc(i.client_name)}</td>` : ""}
+      <td class="hide-m">${fmtDate(i.issue_date)}</td><td class="hide-m">${i.due_date ? fmtDate(i.due_date) : ""}</td><td class="num"><b>${money(i.total, i.currency)}</b></td><td>${invStatus(i)}${i.client_viewed_at && i.status === "shared" ? ' <span class="tag" title="Klijent je otvorio fakturu">otvorena</span>' : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Nema faktura.</td></tr>`}</tbody></table>`;
+  const bindInvRows = () => $$("tr[data-inv]").forEach(tr => tr.addEventListener("click", () => openInvoice(tr.dataset.inv)));
+  let INV_F = "all";
+  async function invoicesView(openId) {
+    const client = ME.user.kind === "client";
+    setCrumb([["Fakture"]]);
+    const list = await api("/invoices");
+    if (client) {
+      app.innerHTML = `<div class="hero sm"><div><span class="eyebrow">Fakture</span><h1>Fakture SCE Assurance</h1><p>Fakture koje vam je SCE Assurance izdao. PDF možete preuzeti i provjeriti da nije mijenjan.</p></div></div>
+        <div id="ilist">${invTable(list, false)}</div>`;
+    } else {
+      const y = new Date().getFullYear(), yr = list.filter(i => i.number && String(i.issue_date).startsWith(y) && i.status !== "cancelled");
+      const open = list.filter(i => ["issued", "shared"].includes(i.status)), late = open.filter(i => daysTo(i.due_date) < 0);
+      const sum = (arr, cur) => arr.filter(i => i.currency === cur).reduce((a, i) => a + i.total, 0);
+      const both = arr => ["BAM", "EUR"].map(c => sum(arr, c) ? money(sum(arr, c), c) : "").filter(Boolean).join(" + ") || money(0, "BAM");
+      const F = { all: "Sve", draft: "Nacrti", open: "Neplaćene", late: "Dospjele", paid: "Plaćene", cancelled: "Stornirane" };
+      const flt = { all: () => true, draft: i => i.status === "draft", open: i => ["issued", "shared"].includes(i.status), late: i => ["issued", "shared"].includes(i.status) && daysTo(i.due_date) < 0, paid: i => i.status === "paid", cancelled: i => i.status === "cancelled" };
+      app.innerHTML = `<div class="hero"><div><span class="eyebrow">Fakture</span><h1>Fakturisanje</h1><p>Fakture na memorandumu SCE Assurance s podacima klijenta iz Evidente, elektronskim odobrenjem i dijeljenjem u klijentskom portalu.</p></div>
+        <div class="inline"><a class="btn light" href="#/settings">Podaci za fakture</a><button class="btn accent" id="ninv">+ Nova faktura</button></div></div>
+        ${NAV.issuerMissing ? `<div class="dlbar">${ICON.lock}<div class="grow"><b>Podaci SCE Assurance nisu potpuni</b><small>Nacrte možete praviti, ali izdavanje je moguće tek kad u Postavkama popunite obavezne podatke.</small></div><a class="btn sm primary" href="#/settings">Postavke</a></div>` : ""}
+        <div class="kpis k4">
+          <div class="card kpi"><b>${yr.length}</b><span>izdanih faktura u ${y}.</span></div>
+          <div class="card kpi"><b class="sm">${both(yr)}</b><span>fakturisano u ${y}.</span></div>
+          <div class="card kpi"><b class="sm">${both(open)}</b><span>${open.length} neplaćenih</span></div>
+          <div class="card kpi ${late.length ? "warn" : ""}"><b class="sm">${both(late)}</b><span>${late.length} dospjelih</span></div></div>
+        <div class="chips" id="ifl">${Object.entries(F).map(([k, t]) => `<button class="chip${INV_F === k ? " on" : ""}" data-f="${k}" type="button">${t}<small>${list.filter(flt[k]).length}</small></button>`).join("")}</div>
+        <div id="ilist">${invTable(list.filter(flt[INV_F]))}</div>`;
+      $("#ninv").addEventListener("click", () => invoiceEditor({}));
+      $$("#ifl [data-f]").forEach(b => b.addEventListener("click", () => { INV_F = b.dataset.f; invoicesView(); }));
+    }
+    bindInvRows();
+    if (openId) openInvoice(openId);
+  }
+  const UNITS = ["sat", "dan", "mj", "kom", "paušal"];
+  const PRESETS = [["Konsultantski dan", "dan"], ["Gap analiza prema standardu", "dan"], ["Interni audit", "dan"], ["Obuka zaposlenih", "dan"], ["Priprema za certifikacijski audit", "dan"], ["Pristup platformi Evidenta", "mj"], ["Paušalna naknada za održavanje sistema", "mj"]];
+  async function invoiceEditor(inv) {
+    const [cs, full] = await Promise.all([api("/clients"), inv.id ? api("/invoices/" + inv.id) : null]);
+    const I = full || { client_id: inv.client_id || "", items: [], lang: "", currency: "", issue_date: new Date().toISOString().slice(0, 10) };
+    let clientData = null, defVat = full ? full.issuer_vat_rate : null;
+    const iss = full ? null : await api("/settings/issuer");
+    if (defVat == null) defVat = iss && iss.vat_payer ? +iss.vat_rate : 0;
+    const rows = (I.items.length ? I.items : [{ description: "", qty: 1, unit: "dan", unit_price: 0, vat_rate: defVat }]).map(x => ({ ...x, price: x.unit_price / 100 }));
+    openDrawer(`${dhead(full ? "Nacrt fakture" : "Nova faktura", "Faktura")}
+      <form class="form" id="ivf" novalidate>
+        <div class="two"><label class="f"><span class="fl">Klijent<b class="req">*</b></span><select id="iv-c" required><option value="">Izaberite…</option>${cs.map(c => `<option value="${c.id}" ${c.id === I.client_id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+          <label class="f">Projekat (neobavezno)<select id="iv-p"><option value="">–</option></select></label></div>
+        <div id="iv-cc"></div>
+        <div class="three"><label class="f"><span class="fl">Datum izdavanja<b class="req">*</b></span><input id="iv-d" type="date" value="${esc(I.issue_date)}" required></label><label class="f">Rok plaćanja<input id="iv-due" type="date" value="${esc(I.due_date || "")}"></label><label class="f">Datum isporuke / period<input id="iv-sd" value="${esc(I.service_date || "")}" placeholder="npr. septembar 2026"></label></div>
+        <div class="three"><label class="f">Jezik fakture<select id="iv-l"><option value="">Automatski prema državi</option>${[["bs", "Bosanski"], ["en", "Engleski"], ["de", "Njemački"]].map(([k, t]) => `<option value="${k}" ${I.lang === k && full ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+          <label class="f">Valuta<select id="iv-cur"><option value="">Automatski</option>${["BAM", "EUR"].map(c => `<option ${I.currency === c && full ? "selected" : ""}>${c}</option>`).join("")}</select></label><label class="f">Mjesto izdavanja<input id="iv-pl" value="${esc(I.place || "")}" placeholder="${esc((iss && iss.place) || "Sarajevo")}"></label></div>
+        <div class="fsec"><h3>Stavke</h3><div class="items" id="iv-items"></div>
+          <div class="inline" style="flex-wrap:wrap"><button class="btn sm" type="button" id="iv-add">+ Stavka</button><select id="iv-preset" class="btn sm"><option value="">Brzo dodaj uslugu…</option>${PRESETS.map((p, i) => `<option value="${i}">${esc(p[0])}</option>`).join("")}</select></div>
+          <datalist id="units">${UNITS.map(u => `<option value="${u}">`).join("")}</datalist>
+          <div class="ivtot" id="iv-tot"></div></div>
+        <label class="f">Napomena o PDV-u<input id="iv-vn" value="${esc(I.vat_note || "")}" placeholder="npr. osnov za oslobođenje od PDV-a, ako postoji (provjerite s računovođom)"></label>
+        <label class="f">Napomena na fakturi<textarea id="iv-n" placeholder="npr. Usluge prema ponudi br. …">${esc(I.notes || "")}</textarea></label>
+        <div class="inline dact" style="flex-wrap:wrap"><button class="btn" type="submit">Sačuvaj nacrt</button><button class="btn" type="button" id="iv-prev">${ICON.file} Pregled PDF</button><button class="btn primary" type="button" id="iv-issue">${ICON.shield} Izdaj i potpiši</button>${full ? '<span class="sp"></span><button class="btn ghost danger" type="button" id="del">Obriši nacrt</button>' : ""}</div>
+      </form>`);
+    $(".dpanel").classList.add("wide");
+    const draw = () => {
+      $("#iv-items").innerHTML = `<div class="ih"><span>Opis</span><span>Kol.</span><span>JM</span><span>Cijena</span><span>PDV %</span><span class="r">Iznos</span><span></span></div>` + rows.map((r, i) => `<div class="irow" data-i="${i}">
+        <textarea data-f="description" rows="1" placeholder="Opis usluge" aria-label="Opis">${esc(r.description)}</textarea>
+        <input data-f="qty" inputmode="decimal" value="${esc(String(r.qty).replace(".", ","))}" aria-label="Količina">
+        <input data-f="unit" list="units" value="${esc(r.unit || "")}" aria-label="Jedinica mjere">
+        <input data-f="price" inputmode="decimal" value="${esc(r.price ? num2(r.price) : "")}" placeholder="0,00" aria-label="Cijena">
+        <input data-f="vat_rate" inputmode="decimal" value="${esc(String(r.vat_rate).replace(".", ","))}" aria-label="PDV %">
+        <b class="r" data-amt>${money(Math.round(parseAmount(r.qty) * r.price * 100))}</b>
+        <button class="btn ghost sm x" type="button" data-rm="${i}" title="Ukloni stavku">${ICON.x}</button></div>`).join("");
+      $$("#iv-items textarea").forEach(auto);
+      totalsDraw();
+    };
+    const auto = t => { t.style.height = "auto"; t.style.height = t.scrollHeight + "px"; };
+    const totalsDraw = () => {
+      const cur = $("#iv-cur").value || (clientData && clientData.country_code && clientData.country_code !== "BA" ? "EUR" : "BAM");
+      let net = 0; const vat = {};
+      rows.forEach(r => { const n = Math.round(parseAmount(r.qty) * r.price * 100); net += n; const vr = parseAmount(r.vat_rate); if (vr > 0) vat[vr] = (vat[vr] || 0) + n; });
+      const vats = Object.entries(vat).map(([r, b]) => [r, Math.round(b * r / 100)]), vt = vats.reduce((a, v) => a + v[1], 0);
+      $("#iv-tot").innerHTML = `<div><span>Osnovica</span><b>${money(net, cur)}</b></div>${vats.map(([r, v]) => `<div><span>PDV ${String(r).replace(".", ",")}%</span><b>${money(v, cur)}</b></div>`).join("")}<div class="grand"><span>Ukupno za plaćanje</span><b>${money(net + vt, cur)}</b></div>`;
+    };
+    $("#iv-items").addEventListener("input", e => {
+      const row = e.target.closest(".irow"); if (!row) return; const r = rows[+row.dataset.i], f = e.target.dataset.f;
+      if (f === "price") r.price = parseAmount(e.target.value); else if (f === "description" || f === "unit") r[f] = e.target.value; else r[f] = e.target.value;
+      if (e.target.tagName === "TEXTAREA") auto(e.target);
+      $("[data-amt]", row).textContent = money(Math.round(parseAmount(r.qty) * r.price * 100)); totalsDraw();
+    });
+    $("#iv-items").addEventListener("focusout", e => { if (e.target.dataset.f === "price") { const r = rows[+e.target.closest(".irow").dataset.i]; e.target.value = r.price ? num2(r.price) : ""; } });
+    $("#iv-items").addEventListener("click", e => { const b = e.target.closest("[data-rm]"); if (!b) return; rows.splice(+b.dataset.rm, 1); if (!rows.length) rows.push({ description: "", qty: 1, unit: "dan", price: 0, vat_rate: curVat() }); draw(); });
+    const curVat = () => clientData && clientData.country_code && clientData.country_code !== "BA" ? 0 : defVat;
+    $("#iv-add").addEventListener("click", () => { rows.push({ description: "", qty: 1, unit: "dan", price: 0, vat_rate: curVat() }); draw(); $$("#iv-items textarea").pop().focus(); });
+    $("#iv-preset").addEventListener("change", e => { const p = PRESETS[e.target.value]; if (!p) return; const empty = rows.findIndex(r => !r.description); const r = { description: p[0], qty: 1, unit: p[1], price: 0, vat_rate: curVat() }; if (empty >= 0) rows[empty] = r; else rows.push(r); e.target.value = ""; draw(); });
+    $("#iv-cur").addEventListener("change", totalsDraw);
+    const showClient = async () => {
+      const id = val("iv-c"); $("#iv-p").innerHTML = '<option value="">–</option>' + NAV.ps.filter(p => p.client_id === id).map(p => `<option value="${p.id}" ${p.id === I.project_id ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+      if (!id) { $("#iv-cc").innerHTML = ""; clientData = null; return; }
+      clientData = await api("/clients/" + id); const chk = EVV.checkClient(clientData);
+      const cn = (EVV.COUNTRIES.find(x => x[0] === clientData.country_code) || [])[1] || "";
+      $("#iv-cc").innerHTML = `<div class="ccard ${chk.missingForInvoice.length ? "warn" : ""}"><div class="grow"><span class="faint small">Kupac, podaci se povlače iz Evidente</span><b>${esc(clientData.legal_name || clientData.name)}</b>
+        <small>${esc([clientData.address, [clientData.postal_code, clientData.city].filter(Boolean).join(" "), cn].filter(Boolean).join(", "))}</small>
+        <small>${esc([clientData.id_number && "ID " + clientData.id_number, clientData.vat_number && "PDV " + clientData.vat_number].filter(Boolean).join(" · "))}</small>
+        ${chk.missingForInvoice.length ? `<small class="orange">Za izdavanje nedostaje: ${esc(chk.missingForInvoice.join(", "))}</small>` : ""}</div><button class="btn sm" type="button" id="iv-ce">Uredi podatke</button></div>`;
+      $("#iv-ce").addEventListener("click", async () => { const keep = collect(); if (full) await api("/invoices/" + full.id, { method: "PUT", body: keep }); clientForm(clientData, () => invoiceEditor(full ? { id: full.id } : { ...keep, client_id: id })); });
+      totalsDraw();
+    };
+    $("#iv-c").addEventListener("change", showClient); showClient();
+    draw();
+    const collect = () => ({ client_id: val("iv-c"), project_id: val("iv-p"), issue_date: val("iv-d"), due_date: val("iv-due"), service_date: val("iv-sd"), lang: val("iv-l"), currency: val("iv-cur"), place: val("iv-pl"), vat_note: val("iv-vn"), notes: val("iv-n"),
+      items: rows.filter(r => String(r.description).trim()).map(r => ({ description: r.description, qty: parseAmount(r.qty), unit: r.unit, unit_price: r.price, vat_rate: parseAmount(r.vat_rate) })) });
+    let savedId = full && full.id;
+    async function save() {
+      const b = collect(); if (!b.client_id) { toast("Izaberite klijenta."); $("#iv-c").focus(); return null; }
+      if (savedId) await api("/invoices/" + savedId, { method: "PUT", body: b }); else savedId = (await api("/invoices", { method: "POST", body: b })).id;
+      return savedId;
+    }
+    $("#ivf").addEventListener("submit", async e => { e.preventDefault(); if (await save()) { toast("Nacrt sačuvan"); closeDrawer(); if (CUR.view === "invoices") invoicesView(); else route(); } });
+    $("#iv-prev").addEventListener("click", async () => { const w = window.open("about:blank"); const id = await save(); if (id) w.location = `/api/invoices/${id}/pdf?inline=1`; else w.close(); });
+    $("#iv-issue").addEventListener("click", async () => {
+      const id = await save(); if (!id) return;
+      const d = await api("/invoices/" + id);
+      if (d.issuer_missing.length) return toast("Prvo popunite podatke SCE Assurance: " + d.issuer_missing.join(", "));
+      if (d.client_missing.length) return toast("Klijentu nedostaje: " + d.client_missing.join(", "));
+      if (!d.items.length) return toast(ERR.no_items);
+      if (!confirm(`Izdati fakturu za ${d.client.legal_name || d.client.name} na ${money(d.totals.total, d.currency)}?\n\nFaktura dobija broj, elektronski je odobrena vašim imenom i više se ne može mijenjati (samo stornirati).`)) return;
+      try { const r = await api(`/invoices/${id}/issue`, { method: "POST" }); toast(`Faktura ${r.number} je izdana`); closeDrawer(); location.hash = "#/invoices/" + id; if (CUR.view === "invoices") route(); }
+      catch (x) { if (x.data && x.data.missing) toast((ERR[x.message] || x.message) + " " + x.data.missing.join(", ")); }
+    });
+    $("#del") && $("#del").addEventListener("click", async () => { if (!confirm("Obrisati nacrt fakture?")) return; await api("/invoices/" + full.id, { method: "DELETE" }); closeDrawer(); invoicesView(); });
+  }
+  async function sha256File(file) { const b = await crypto.subtle.digest("SHA-256", await file.arrayBuffer()); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join(""); }
+  async function openInvoice(id) {
+    const d = await api("/invoices/" + id), admin = ME.user.kind === "admin";
+    if (admin && d.status === "draft") return invoiceEditor({ id });
+    const step = (on, t, sub) => `<li class="${on ? "on" : ""}"><i>${on ? ICON.check : ""}</i><div><b>${t}</b>${sub ? `<small>${sub}</small>` : ""}</div></li>`;
+    const base = `/api/invoices/${d.id}/pdf`;
+    openDrawer(`${dhead(esc(d.number), "Faktura")}
+      <div class="invhead"><div><span class="faint small">${esc(d.client_name)}</span><b class="amt">${money(d.total, d.currency)}</b><small class="muted">izdana ${fmtDate(d.issue_date)} · rok ${fmtDate(d.due_date)}</small></div>${invStatus(d)}</div>
+      <div class="inline" style="flex-wrap:wrap"><a class="btn primary" href="${base}">${ICON.dl} Preuzmi PDF${d.signed_at || d.signed ? " (potpisan)" : ""}</a><a class="btn" href="${base}?inline=1" target="_blank" rel="noopener">${ICON.file} Otvori</a>${admin && d.signed_key ? `<a class="btn ghost" href="${base}?v=original">Original bez potpisa</a>` : ""}</div>
+      ${admin ? `<div class="sec"><h3>${ICON.task} Tok fakture</h3><ol class="flow">
+        ${step(true, "Izdana i elektronski odobrena", `${esc(d.approved_name || d.approved_by)} · ${fmtDT(d.approved_at)} · kod ${esc(d.verify_code)}`)}
+        ${step(!!d.signed_at, "Kvalifikovani digitalni potpis", d.signed_at ? `učitan ${fmtDT(d.signed_at)}` : "neobavezno: potpišite PDF certifikatom i učitajte ga")}
+        ${step(!!d.shared_at, "Podijeljena s klijentom", d.shared_at ? fmtDT(d.shared_at) + (d.client_viewed_at ? ` · klijent otvorio ${fmtDT(d.client_viewed_at)}` : " · klijent još nije otvorio") : "vidljiva korisnicima klijenta u portalu")}
+        ${step(!!d.paid_at, "Plaćena", d.paid_at ? fmtDate(d.paid_at) : "")}</ol>
+        ${d.status === "cancelled" ? '<p class="tag red">Stornirana</p>' : `<div class="inline" style="flex-wrap:wrap;margin-top:12px">
+          ${["issued", "shared", "paid"].includes(d.status) ? `<label class="btn" for="sgf">${ICON.shield} ${d.signed_at ? "Zamijeni potpisani PDF" : "Učitaj potpisani PDF"}</label><input type="file" id="sgf" accept="application/pdf" hidden>` : ""}
+          ${d.status === "issued" ? `<button class="btn accent" id="shr" type="button">Podijeli s klijentom</button>` : ""}
+          ${["issued", "shared"].includes(d.status) ? `<button class="btn" id="pd" type="button">${ICON.check} Označi plaćeno</button><span class="sp"></span><button class="btn ghost danger" id="cn" type="button">Storniraj</button>` : ""}</div>`}
+        <details class="howsign"><summary>Kako dodati kvalifikovani digitalni potpis?</summary><ol><li>Preuzmite PDF (original bez potpisa).</li><li>Otvorite ga u Adobe Acrobat Readeru ili alatu vašeg certifikacionog tijela i potpišite ga kvalifikovanim certifikatom (kartica, USB token ili udaljeni potpis).</li><li>Sačuvajte potpisani PDF i učitajte ga ovdje. Klijent tada dobija potpisanu verziju.</li></ol><p class="faint small">Evidenta ne čuva vaš privatni ključ; potpis nastaje na vašem uređaju.</p></details></div>` : ""}
+      <div class="sec"><h3>${ICON.lock} Provjera autentičnosti</h3><p class="muted small">Odaberite PDF koji imate, a Evidenta provjerava da je identičan izdanoj fakturi (SHA-256). Provjera se radi u vašem pregledniku, datoteka se ne šalje.</p>
+        <label class="btn sm" for="vf" style="margin-top:8px">Provjeri PDF</label><input type="file" id="vf" accept="application/pdf" hidden><p id="vres" class="small" style="margin-top:8px"></p>
+        <p class="faint small hash">Original: <code>${esc(d.pdf_sha256 || "")}</code>${d.signed_sha256 ? `<br>Potpisani: <code>${esc(d.signed_sha256)}</code>` : ""}${d.verify_code ? `<br>Kod za provjeru na fakturi: <b>${esc(d.verify_code)}</b>` : ""}</p></div>`, () => { if (location.hash === "#/invoices/" + id) history.replaceState(null, "", "#/invoices"); });
+    $(".dpanel").classList.add("wide");
+    $("#vf").addEventListener("change", async e => { const f = e.target.files[0]; if (!f) return; const h = await sha256File(f); const ok = h === d.pdf_sha256 || h === d.signed_sha256;
+      $("#vres").innerHTML = ok ? `<span class="tag teal">${ICON.check} Datoteka je identična ${h === d.signed_sha256 ? "potpisanoj" : "izdanoj"} fakturi ${esc(d.number)}.</span>` : `<span class="tag red">Datoteka se razlikuje od izdane fakture. Ne koristite je bez provjere s SCE Assurance.</span>`; });
+    const reload = () => { openInvoice(id); if (CUR.view === "invoices") api("/invoices").then(() => invoicesView()); };
+    $("#sgf") && $("#sgf").addEventListener("change", async e => { const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append("file", f);
+      try { await api(`/invoices/${id}/signed`, { method: "POST", body: fd }); toast("Potpisani PDF je učitan"); reload(); } catch (x) {} });
+    $("#shr") && $("#shr").addEventListener("click", async () => { if (!confirm(`Podijeliti fakturu ${d.number} s korisnicima klijenta ${d.client_name}? Vidjet će je u klijentskom portalu.`)) return; await api(`/invoices/${id}/share`, { method: "POST" }); toast("Faktura je podijeljena s klijentom"); reload(); });
+    $("#pd") && $("#pd").addEventListener("click", async () => { const dt = prompt("Datum uplate (GGGG-MM-DD):", new Date().toISOString().slice(0, 10)); if (!dt) return; await api(`/invoices/${id}/paid`, { method: "POST", body: { paid_at: dt } }); toast("Označeno kao plaćeno"); reload(); });
+    $("#cn") && $("#cn").addEventListener("click", async () => { if (!confirm(`Stornirati fakturu ${d.number}? Broj ostaje zauzet, a faktura se označava kao stornirana.`)) return; await api(`/invoices/${id}/cancel`, { method: "POST" }); toast("Faktura je stornirana"); reload(); });
   }
 
   /* ---------- project ---------- */

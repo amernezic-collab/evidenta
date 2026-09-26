@@ -14,6 +14,16 @@ import { recordsApi, reviewsApi, registersXlsx, snapshot, history, REVIEW_IN, RE
 import { REGISTERS } from "./registers.js";
 import { loadUser, scope, projectAccess, isAdmin, active, canDownload } from "./access.js";
 import { mfaApi, mfaOk, mfaNeeded } from "./mfa.js";
+import { invoicesApi, settingsApi } from "./invoice.js";
+import "../public/validate.js";
+const V = globalThis.EVV;
+const CLIENT_COLS = ["name", "legal_name", "country_code", "address", "postal_code", "city", "id_number", "vat_number", "court_reg", "industry", "phone", "email", "invoice_email", "website", "iban", "contact_name", "contact_email", "contact_phone", "notes"];
+function clientValues(b) {
+  const c = V.checkClient(b);
+  if (Object.keys(c.errors).length) return { errors: c.errors };
+  const v = c.value, country = (V.COUNTRIES.find(x => x[0] === v.country_code) || [])[1] || null;
+  return { cols: [...CLIENT_COLS, "country"], vals: [...CLIENT_COLS.map(k => v[k] || null), country] };
+}
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
 const now = () => new Date().toISOString();
@@ -175,6 +185,19 @@ async function api(req, env, url, user) {
     }
   }
 
+  if (p[0] === "settings") return settingsApi(req, env, u, p, { json, err, body, log, now });
+  if (p[0] === "invoices") return invoicesApi(req, env, u, p, url, { json, err, body, log, now, uid });
+  if (p[0] === "vies" && m === "GET") {
+    if (!staff) return err(403, "read_only");
+    const cc = String(url.searchParams.get("cc") || "").toUpperCase().replace("GR", "EL"), n = String(url.searchParams.get("n") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(new RegExp("^" + cc), "");
+    if (!V.EU.includes(cc) || !n) return err(400, "vies_input");
+    try {
+      const r = await fetch(`https://ec.europa.eu/taxation_customs/vies/rest-api/ms/${cc}/vat/${n}`, { headers: { accept: "application/json" }, cf: { cacheTtl: 0 } });
+      if (!r.ok) return err(502, "vies_unavailable");
+      const j = await r.json();
+      return json({ valid: !!j.isValid, name: j.name && j.name !== "---" ? j.name : null, address: j.address && j.address !== "---" ? j.address : null, checked_at: now() });
+    } catch { return err(502, "vies_unavailable"); }
+  }
   if (p[0] === "download-requests" && m === "GET") {
     if (!admin) return err(403, "admin_only");
     return json((await env.DB.prepare(`SELECT m.project_id, m.email, m.access, m.download_requested_at, p.name project_name, c.name client_name, u.name FROM memberships m JOIN projects p ON p.id=m.project_id JOIN clients c ON c.id=p.client_id LEFT JOIN users u ON u.email=m.email WHERE m.can_download=0 AND m.download_requested_at IS NOT NULL ORDER BY m.download_requested_at`).all()).results);
@@ -198,11 +221,12 @@ async function api(req, env, url, user) {
     }
     if (!staff) return err(403, "read_only");
     if (m === "POST") {
-      const b = await body(req); const name = S(b.name, 160); if (!name) return err(400, "name");
+      const b = await body(req), cv = clientValues(b);
+      if (cv.errors) return json({ error: "invalid", fields: cv.errors }, 400);
       const id = uid();
-      await env.DB.prepare("INSERT INTO clients (id,name,country,industry,contact_name,contact_email,notes,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?)")
-        .bind(id, name, S(b.country, 60), S(b.industry, 120), S(b.contact_name, 120), S(b.contact_email, 160), S(b.notes, 4000), now(), user).run();
-      await log(env, user, "create", "client", id, null, { name });
+      await env.DB.prepare(`INSERT INTO clients (id,${cv.cols.join(",")},created_at,created_by,updated_at) VALUES (?,${cv.cols.map(() => "?").join(",")},?,?,?)`)
+        .bind(id, ...cv.vals, now(), user, now()).run();
+      await log(env, user, "create", "client", id, null, { name: b.name });
       return json({ id }, 201);
     }
   }
@@ -212,10 +236,10 @@ async function api(req, env, url, user) {
       const ok = u.kind === "consultant" && await env.DB.prepare(`SELECT 1 FROM clients WHERE id=? AND (created_by=? OR id IN (SELECT client_id FROM projects WHERE ${w} AND id IN (SELECT project_id FROM memberships WHERE email=? AND access='edit')))`).bind(p[1], user, ...b0, user).first();
       if (!ok) return err(403, "read_only");
     }
-    const b = await body(req); const name = S(b.name, 160); if (!name) return err(400, "name");
-    await env.DB.prepare("UPDATE clients SET name=?,country=?,industry=?,contact_name=?,contact_email=?,notes=? WHERE id=?")
-      .bind(name, S(b.country, 60), S(b.industry, 120), S(b.contact_name, 120), S(b.contact_email, 160), S(b.notes, 4000), p[1]).run();
-    await log(env, user, "update", "client", p[1], null, { name });
+    const b = await body(req), cv = clientValues(b);
+    if (cv.errors) return json({ error: "invalid", fields: cv.errors }, 400);
+    await env.DB.prepare(`UPDATE clients SET ${cv.cols.map(c => c + "=?").join(",")}, updated_at=? WHERE id=?`).bind(...cv.vals, now(), p[1]).run();
+    await log(env, user, "update", "client", p[1], null, { name: b.name });
     return json({ ok: true });
   }
 

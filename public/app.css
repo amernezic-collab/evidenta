@@ -559,3 +559,71 @@ body.gate .mtop .burger{display:none}
 @media (max-width:1000px){.cgrid{grid-template-columns:minmax(0,1fr)}.cusers{border-left:0;border-top:1px solid var(--line)}}
 @media (max-width:700px){.acc,.qrwrap{grid-template-columns:minmax(0,1fr)}.qr{max-width:200px}.hero{padding:20px}.cstats span{min-width:0}}
 .cbox>header .grow{flex:1 1 200px;min-width:0}
+
+/* ---------- v6: validated forms, legal data, invoices ---------- */
+.dpanel.wide{width:min(900px,100vw)}
+.form .three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.fsec{display:grid;gap:12px}
+.fsec>h3{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--steel);padding-top:6px;border-top:1px solid var(--line)}
+.card.fsec>h3{border-top:0;padding-top:0}
+.fsec>h3 .btn{text-transform:none;letter-spacing:0}
+.fl{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.req{color:var(--orange);font-weight:800}
+.forinv{font-style:normal;font-size:10.5px;font-weight:700;color:var(--steel);background:var(--steel-soft);padding:1px 7px;border-radius:99px}
+.legend2{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12.5px;color:var(--muted);margin-top:-6px}
+.legend2 span{display:inline-flex;align-items:center;gap:6px}
+.vf .hint{font-size:11.5px;font-weight:500;color:var(--faint);min-height:0;background:none;padding:0;border-radius:0}
+.vf .hint:empty{display:none}
+.vf .ferr{font-size:12px;font-weight:650;color:var(--red)}
+.vf .ferr:empty{display:none}
+.vf.bad input,.vf.bad select,.vf.bad textarea{border-color:var(--red);background:color-mix(in srgb,var(--red-soft) 55%,var(--bg))}
+.vf.bad .hint{display:none}
+.vf.ok input{border-color:color-mix(in srgb,var(--teal) 55%,var(--line2))}
+.completeness{display:grid;gap:6px;font-size:13px;color:var(--muted);padding:12px;border-radius:12px;background:var(--card2)}
+.completeness svg{color:var(--teal);vertical-align:-3px}
+.cbar{height:6px;border-radius:99px;background:var(--line);overflow:hidden}.cbar i{display:block;height:100%;background:linear-gradient(90deg,var(--orange),var(--teal));transition:width .3s}
+.legal .lh{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.legal h3{display:flex;align-items:center;gap:8px}
+.legal dl{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px 18px;margin:0}
+.legal dt{font-size:11.5px;color:var(--faint);font-weight:650}.legal dd{margin:0;font-size:13.5px;font-weight:600;overflow-wrap:anywhere}
+.setform{max-width:1100px}
+.setform .card{display:grid;gap:12px}
+/* invoices */
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 12px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line2);background:var(--card);border-radius:99px;padding:5px 12px;font:650 13px/1.2 inherit;color:var(--ink2);cursor:pointer}
+.chip small{font-size:11px;color:var(--faint);font-weight:700}
+.chip.on{background:var(--navy);border-color:var(--navy);color:#fff}.chip.on small{color:#f2a15f}
+.kpi b.sm{font-size:1.15rem}
+.tbl .num{text-align:right;white-space:nowrap}
+.invt .ttl small{display:flex;align-items:center;gap:4px;color:var(--teal)}
+.ccard{display:flex;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--line);border-left:3px solid var(--teal);border-radius:12px;background:var(--card2)}
+.ccard.warn{border-left-color:var(--orange)}
+.ccard .grow{display:grid;gap:2px;min-width:0}.ccard b{font-size:14px}.ccard small{color:var(--muted);font-size:12.5px}.ccard small.orange{color:var(--orange);font-weight:650}
+.items{display:grid;gap:6px}
+.ih,.irow{display:grid;grid-template-columns:minmax(0,1fr) 64px 70px 104px 62px 110px 32px;gap:6px;align-items:start}
+.ih{font-size:11px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:0 4px}
+.ih .r,.irow .r{text-align:right}
+.irow input,.irow textarea{border:1px solid var(--line2);border-radius:9px;background:var(--bg);padding:8px 9px;font:450 14px/1.35 inherit;color:var(--ink);width:100%;min-width:0;resize:none;overflow:hidden}
+.irow input:focus,.irow textarea:focus{outline:2px solid var(--blue);outline-offset:-1px}
+.irow input[data-f="qty"],.irow input[data-f="price"],.irow input[data-f="vat_rate"]{text-align:right;font-variant-numeric:tabular-nums}
+.irow b{padding-top:9px;font-variant-numeric:tabular-nums;font-size:13.5px}
+.irow .x{margin-top:4px}
+select.btn{padding-right:28px}
+.ivtot{justify-self:end;display:grid;gap:4px;min-width:280px;margin-top:6px;font-size:13.5px}
+.ivtot div{display:flex;justify-content:space-between;gap:20px}.ivtot span{color:var(--muted)}.ivtot b{font-variant-numeric:tabular-nums}
+.ivtot .grand{margin-top:4px;padding:10px 12px;border-radius:10px;background:var(--navy);color:#fff}.ivtot .grand span{color:#f2a15f;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.06em}.ivtot .grand b{font-size:16px}
+.invhead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:14px;background:var(--card2)}
+.invhead>div{display:grid;gap:2px}.invhead .amt{font-size:1.6rem;font-weight:850;color:var(--ink);font-variant-numeric:tabular-nums}
+.flow{list-style:none;margin:0;padding:0;display:grid;gap:0}
+.flow li{display:grid;grid-template-columns:26px minmax(0,1fr);gap:10px;padding:6px 0;position:relative}
+.flow li:not(:last-child)::after{content:"";position:absolute;left:12px;top:30px;bottom:-6px;width:2px;background:var(--line)}
+.flow i{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:2px solid var(--line2);background:var(--card);color:#fff}
+.flow li.on i{background:var(--teal);border-color:var(--teal)}.flow li.on:not(:last-child)::after{background:var(--teal)}
+.flow i svg{width:14px;height:14px}
+.flow div{display:grid}.flow small{color:var(--muted);font-size:12.5px}
+.howsign{margin-top:14px;font-size:13px}.howsign summary{cursor:pointer;font-weight:700;color:var(--blue)}.howsign ol{margin:8px 0 6px;padding-left:20px;display:grid;gap:3px;color:var(--ink2)}
+.hash{margin-top:10px;overflow-wrap:anywhere}.hash code{font-size:11px}
+@media (max-width:760px){.form .three{grid-template-columns:minmax(0,1fr)}
+  .ih{display:none}.irow{grid-template-columns:repeat(4,minmax(0,1fr)) 32px;padding:10px;border:1px solid var(--line);border-radius:12px}
+  .irow textarea{grid-column:1/-1}.irow b{grid-column:1/5;text-align:right}.ivtot{min-width:0;width:100%}}
+.form .three,.form .two{align-items:start}
