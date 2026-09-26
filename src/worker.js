@@ -12,7 +12,8 @@ import { STANDARDS } from "./catalog.js";
 import { risksApi, auditsApi, findingsApi, projectCounters, dashboard, search, report } from "./extra.js";
 import { recordsApi, reviewsApi, registersXlsx, snapshot, history, REVIEW_IN, REVIEW_OUT } from "./more.js";
 import { REGISTERS } from "./registers.js";
-import { loadUser, scope, projectAccess, isAdmin, active } from "./access.js";
+import { loadUser, scope, projectAccess, isAdmin, active, canDownload } from "./access.js";
+import { mfaApi, mfaOk, mfaNeeded } from "./mfa.js";
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
 const now = () => new Date().toISOString();
@@ -130,10 +131,14 @@ async function api(req, env, url, user) {
   const u = await loadUser(env, user), sc = col => scope(u, col), admin = isAdmin(u), staff = admin || u.kind === "consultant";
 
   if (p[0] === "me") return json({ email: user, user: { email: u.email, name: u.name, kind: u.kind, client_id: u.client_id },
+    mfa: { required: !!u.mfa_required, enabled: !!u.mfa_enabled_at, ok: mfaNeeded(u) ? await mfaOk(req, env, u) : true },
     standards: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, v.name])),
     catalogs: Object.fromEntries(Object.entries(STANDARDS).map(([k, v]) => [k, { kinds: v.kinds, groups: v.groups, soa: v.soa, count: v.items.length }])),
     registers: REGISTERS, reviewIn: REVIEW_IN, reviewOut: REVIEW_OUT });
   if (!active(u)) return err(403, "pending");
+  if (p[0] === "mfa") return mfaApi(req, env, u, p, log);
+  if (mfaNeeded(u) && !(await mfaOk(req, env, u))) return err(401, "mfa");
+  const noDl = () => err(403, "download_not_approved");
 
   if (p[0] === "dashboard" && m === "GET") {
     const [w, b] = sc("p.id");
@@ -145,7 +150,13 @@ async function api(req, env, url, user) {
   /* users and access (admin) */
   if (p[0] === "users") {
     if (!admin) return err(403, "admin_only");
-    if (!p[1] && m === "GET") return json((await env.DB.prepare(`SELECT u.*, c.name client_name, (SELECT COUNT(*) FROM memberships WHERE email=u.email) projects FROM users u LEFT JOIN clients c ON c.id=u.client_id ORDER BY u.kind='pending' DESC, u.kind, u.email`).all()).results);
+    if (!p[1] && m === "GET") return json((await env.DB.prepare(`SELECT u.email, u.name, u.org, u.kind, u.client_id, u.created_at, u.last_seen, u.mfa_required, (u.mfa_enabled_at IS NOT NULL) mfa_enabled, c.name client_name, (SELECT COUNT(*) FROM memberships WHERE email=u.email) projects, (SELECT COUNT(*) FROM memberships WHERE email=u.email AND download_requested_at IS NOT NULL AND can_download=0) dl_requests FROM users u LEFT JOIN clients c ON c.id=u.client_id ORDER BY u.kind='pending' DESC, u.kind, u.email`).all()).results);
+    if (p[1] && p[2] === "mfa-reset" && m === "POST") {
+      const email = decodeURIComponent(p[1]);
+      await env.DB.prepare("UPDATE users SET mfa_secret=NULL, mfa_enabled_at=NULL, mfa_last_step=NULL, mfa_fails=0, mfa_lock_until=NULL WHERE email=?").bind(email).run();
+      await log(env, user, "update", "user", email, null, { title: email + ": MFA resetovan" });
+      return json({ ok: true });
+    }
     if (m === "POST" || m === "PUT") {
       const b = await body(req), email = String((p[1] ? decodeURIComponent(p[1]) : b.email) || "").trim().toLowerCase();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err(400, "email");
@@ -153,14 +164,20 @@ async function api(req, env, url, user) {
       if (email === u.email && kind !== "admin") return err(400, "self");
       const client = kind === "client" ? S(b.client_id, 64) : null;
       if (kind === "client" && !(client && await env.DB.prepare("SELECT 1 FROM clients WHERE id=?").bind(client).first())) return err(400, "client");
-      await env.DB.prepare(`INSERT INTO users (email,name,org,kind,client_id,created_at,created_by) VALUES (?,?,?,?,?,?,?)
-        ON CONFLICT(email) DO UPDATE SET name=excluded.name, org=excluded.org, kind=excluded.kind, client_id=excluded.client_id`)
-        .bind(email, S(b.name, 120), S(b.org, 120), kind, client, now(), user).run();
+      const mfaReq = b.mfa_required === undefined ? (kind === "client" ? 1 : 0) : (b.mfa_required ? 1 : 0);
+      await env.DB.prepare(`INSERT INTO users (email,name,org,kind,client_id,created_at,created_by,mfa_required) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(email) DO UPDATE SET name=excluded.name, org=excluded.org, kind=excluded.kind, client_id=excluded.client_id, mfa_required=excluded.mfa_required`)
+        .bind(email, S(b.name, 120), S(b.org, 120), kind, client, now(), user, mfaReq).run();
       if (kind === "client") await env.DB.prepare("DELETE FROM memberships WHERE email=? AND project_id NOT IN (SELECT id FROM projects WHERE client_id=?)").bind(email, client).run();
       if (kind === "disabled") await env.DB.prepare("DELETE FROM memberships WHERE email=?").bind(email).run();
       await log(env, user, "update", "user", email, null, { title: email, kind });
       return json({ ok: true });
     }
+  }
+
+  if (p[0] === "download-requests" && m === "GET") {
+    if (!admin) return err(403, "admin_only");
+    return json((await env.DB.prepare(`SELECT m.project_id, m.email, m.access, m.download_requested_at, p.name project_name, c.name client_name, u.name FROM memberships m JOIN projects p ON p.id=m.project_id JOIN clients c ON c.id=p.client_id LEFT JOIN users u ON u.email=m.email WHERE m.can_download=0 AND m.download_requested_at IS NOT NULL ORDER BY m.download_requested_at`).all()).results);
   }
 
   /* clients */
@@ -234,9 +251,22 @@ async function api(req, env, url, user) {
     if (!sub && m === "GET") {
       const items = await projectItems(env, pr), summary = summarize(items), counters = await projectCounters(env, pr.id);
       await snapshot(env, pr, summary, counters);
-      return json({ ...pr, summary, counters, access: acc });
+      return json({ ...pr, summary, counters, access: acc, can_download: await canDownload(env, u, pr.id), is_client: u.kind === "client",
+        download_requested: u.kind === "client" ? !!(await env.DB.prepare("SELECT download_requested_at FROM memberships WHERE project_id=? AND email=?").bind(pr.id, u.email).first() || {}).download_requested_at : false });
     }
     if (sub === "history" && m === "GET") return json(await history(env, pr));
+    if (sub === "download-request" && m === "DELETE") {
+      if (!admin) return err(403, "admin_only");
+      const email = String((await body(req)).email || "").toLowerCase();
+      await env.DB.prepare("UPDATE memberships SET download_requested_at=NULL WHERE project_id=? AND email=?").bind(pr.id, email).run();
+      await log(env, user, "update", "access", email, pr.id, { title: email + ": zahtjev za preuzimanje odbijen" });
+      return json({ ok: true });
+    }
+    if (sub === "download-request" && m === "POST") {
+      await env.DB.prepare("UPDATE memberships SET download_requested_at=? WHERE project_id=? AND email=? AND can_download=0").bind(now(), pr.id, user).run();
+      await log(env, user, "update", "access", user, pr.id, { title: "zatražio odobrenje za preuzimanje" });
+      return json({ ok: true });
+    }
     if (sub === "records") return recordsApi(req, env, user, pr, p, url, write);
     if (sub === "reviews") return reviewsApi(req, env, user, pr, p, write);
     if (sub === "members") {
@@ -247,8 +277,12 @@ async function api(req, env, url, user) {
         const target = await env.DB.prepare("SELECT * FROM users WHERE email=?").bind(email).first();
         if (!target || !active(target)) return err(400, "user_not_active");
         if (target.kind === "client" && target.client_id !== pr.client_id) return err(400, "other_client");
-        await env.DB.prepare("INSERT INTO memberships (project_id,email,access,added_at,added_by) VALUES (?,?,?,?,?) ON CONFLICT(project_id,email) DO UPDATE SET access=excluded.access").bind(pr.id, email, access, now(), user).run();
-        await log(env, user, "update", "access", email, pr.id, { title: `${email}: ${access === "edit" ? "uređivanje" : "pregled"}` });
+        const cur = await env.DB.prepare("SELECT * FROM memberships WHERE project_id=? AND email=?").bind(pr.id, email).first();
+        const dl = b.can_download === undefined ? (cur ? cur.can_download : (target.kind === "client" ? 0 : 1)) : (b.can_download ? 1 : 0);
+        await env.DB.prepare(`INSERT INTO memberships (project_id,email,access,added_at,added_by,can_download,download_requested_at) VALUES (?,?,?,?,?,?,NULL)
+          ON CONFLICT(project_id,email) DO UPDATE SET access=excluded.access, can_download=excluded.can_download, download_requested_at=CASE WHEN excluded.can_download=1 THEN NULL ELSE memberships.download_requested_at END`)
+          .bind(pr.id, email, access, now(), user, dl).run();
+        await log(env, user, "update", "access", email, pr.id, { title: `${email}: ${access === "edit" ? "uređivanje" : "pregled"}${dl ? ", preuzimanje dozvoljeno" : ", bez preuzimanja"}` });
         return json({ ok: true });
       }
       if (m === "DELETE" && p[3]) {
@@ -259,6 +293,7 @@ async function api(req, env, url, user) {
       }
     }
     if (sub === "registers.xlsx" && m === "GET") {
+      if (!(await canDownload(env, u, pr.id))) return noDl();
       const items = await projectItems(env, pr), type = url.searchParams.get("type") || "all";
       const x = await registersXlsx(env, pr, items, summarize(items), type, user);
       if (!x) return err(404, "register");
@@ -271,6 +306,7 @@ async function api(req, env, url, user) {
     if (sub === "audits") return auditsApi(req, env, user, pr, p);
     if (sub === "findings") return findingsApi(req, env, user, pr, p);
     if (sub === "report" && m === "GET" && p[3]) {
+      if (!(await canDownload(env, u, pr.id))) return noDl();
       const kind = p[3].replace(/\.docx$/, ""), items = await projectItems(env, pr);
       const bytes = await report(env, user, pr, kind, items, summarize(items), url.searchParams.get("audit"), url.searchParams.get("review"));
       if (!bytes) return err(404, "report");
@@ -333,9 +369,11 @@ async function api(req, env, url, user) {
       return json({ id }, 201);
     }
 
+    if (sub === "audit" && m === "GET" && u.kind === "client") return err(403, "internal");
     if (sub === "audit" && m === "GET") return json((await env.DB.prepare("SELECT * FROM audit WHERE project_id=? ORDER BY id DESC LIMIT 300").bind(pr.id).all()).results);
 
     if (sub === "export" && m === "GET") {
+      if (!(await canDownload(env, u, pr.id))) return noDl();
       const items = await projectItems(env, pr);
       const safe = (pr.client_name + "_" + pr.name).replace(/[^\w\-]+/g, "_").slice(0, 60);
       let rows, fname;
@@ -389,6 +427,7 @@ async function api(req, env, url, user) {
     if (!acc) return err(404, "evidence");
     if (m !== "GET" && acc !== "edit") return err(403, "read_only");
     if (m === "GET" && p[2] === "download") {
+      if (!(await canDownload(env, u, e.project_id))) return noDl();
       const obj = await env.FILES.get(e.r2_key);
       if (!obj) return err(404, "file");
       await log(env, user, "download", "evidence", e.id, e.project_id, { name: e.name });

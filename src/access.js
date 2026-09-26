@@ -40,3 +40,10 @@ export async function projectAccess(env, u, project) {
   if (!m) return null;
   return u.kind === "client" && m.access === "edit" ? "edit" : m.access;
 }
+
+/* downloads (reports, registers, evidence) need an explicit approval for client users */
+export async function canDownload(env, u, projectId) {
+  if (isAdmin(u)) return true;
+  const m = await env.DB.prepare("SELECT can_download FROM memberships WHERE project_id=? AND email=?").bind(projectId, u.email).first();
+  return !!(m && m.can_download);
+}
