@@ -423,9 +423,24 @@ const SEC = {
   "x-robots-tag": "noindex, nofollow"
 };
 
+async function landing(req, env, url) {
+  if (!["GET", "HEAD"].includes(req.method)) return new Response("Method not allowed", { status: 405 });
+  const p = url.pathname;
+  const ok = p === "/" || p.startsWith("/landing/") || p.startsWith("/fonts/") || p === "/favicon.svg";
+  if (!ok) return Response.redirect(url.origin + "/", 302);
+  const res = await env.ASSETS.fetch(new Request(new URL(p === "/" ? "/landing/" : p, url), req));
+  const out = new Response(res.body, res);
+  for (const [k, v] of Object.entries(SEC)) out.headers.set(k, v);
+  if (p.startsWith("/landing/") && !p.endsWith("/")) out.headers.set("cache-control", "public, max-age=3600");
+  return out;
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    /* public coming-soon page on the apex domain; the app itself stays on app.evidenta.io behind Access */
+    if (url.hostname === "www.evidenta.io") return Response.redirect("https://evidenta.io" + url.pathname, 301);
+    if (url.hostname === "evidenta.io" || (env.DEV_USER && url.hostname === "evidenta.localhost")) return landing(req, env, url);
     const user = await verifyAccess(req, env).catch(() => null);
     if (!user) return new Response("Pristup odbijen. Prijavite se preko Cloudflare Access.", { status: 403, headers: { "content-type": "text/plain; charset=utf-8", ...SEC } });
     let res;
