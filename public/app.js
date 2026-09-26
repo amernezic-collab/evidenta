@@ -45,6 +45,7 @@
     dl: svg('<path d="M8 2v8M4.8 7L8 10.2 11.2 7M2.5 13.5h11"/>'),
     invoice: svg('<path d="M3.5 1.5h9v13l-2-1.2-2.5 1.2-2.5-1.2-2 1.2z"/><path d="M6 5h4M6 8h4M6 11h2"/>'),
     gear: svg('<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>'),
+    mail: svg('<rect x="1.5" y="3" width="13" height="10" rx="2"/><path d="M2 4l6 5 6-5"/>'),
     check: svg('<path d="M3 8.5l3 3 7-7"/>'),
     cal: svg('<rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/>')
   };
@@ -78,7 +79,7 @@
   const ERR = { download_not_approved: "Preuzimanje još nije odobreno. Zatražite odobrenje od administratora.", read_only: "Imate pristup samo za pregled.", admin_only: "Samo administrator.", other_client: "Korisnik klijenta može biti dodan samo na projekte svoje firme.", code: "Kod nije ispravan.", locked: "Previše pogrešnih pokušaja. Pokušajte ponovo za 15 minuta.", user_not_active: "Korisnik nije aktivan.", invalid: "Provjerite označena polja.",
     issuer_incomplete: "Prvo popunite podatke SCE Assurance u Postavkama.", client_incomplete: "Klijentu nedostaju podaci za fakturu.", no_items: "Faktura nema nijednu stavku.",
     zero_total: "Iznos fakture mora biti veći od nule.", not_pdf: "Datoteka nije PDF.", no_signature: "U PDF-u nije pronađen digitalni potpis. Potpišite PDF certifikatom pa ga učitajte.",
-    too_large: "Datoteka je prevelika.", vies_unavailable: "VIES servis EU trenutno nije dostupan.", vies_input: "Za VIES provjeru unesite EU PDV broj.", not_draft: "Izdana faktura se ne može mijenjati.", numbering: "Broj fakture nije dodijeljen, pokušajte ponovo.", pdf_failed: "PDF nije napravljen. Faktura je ostala nacrt." };
+    too_large: "Datoteka je prevelika.", vies_unavailable: "VIES servis EU trenutno nije dostupan.", vies_input: "Za VIES provjeru unesite EU PDV broj.", not_draft: "Izdana faktura se ne može mijenjati.", numbering: "Broj fakture nije dodijeljen, pokušajte ponovo.", pdf_failed: "PDF nije napravljen. Faktura je ostala nacrt.", mail_from_missing: "Upišite adresu pošiljaoca u Postavkama.", email_not_configured: "Slanje e-maila nije podešeno (Email Service).", not_issued: "Faktura još nije izdana." };
   function toast(t) { const el = $("#toast"); el.textContent = t; el.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("on"), 2600); }
   const pad = n => String(n).padStart(2, "0");
   const fmtDate = d => { if (!d) return ""; const x = /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + "T00:00:00") : new Date(d); return `${pad(x.getDate())}.${pad(x.getMonth() + 1)}.${x.getFullYear()}.`; };
@@ -560,9 +561,13 @@
           <div class="three">${f("due_days", { type: "number", inputmode: "numeric" })}${f("vat_rate", { type: "number", hint: "Za BiH 17%, ako je firma u sistemu PDV-a" })}<span></span></div>
           <div class="two">${f("signer_name")}${f("signer_title", { ph: "npr. Direktor" })}</div>
           ${f("footer", { ph: "npr. Hvala na povjerenju." })}</div>
+        <div class="card fsec"><h3>Slanje faktura e-mailom</h3>
+          <p class="muted small">E-mailovi se šalju preko Cloudflare Email Service. Domena adrese pošiljaoca (npr. sceassurance.com) mora biti dodana u Cloudflare dashboardu pod Email Service › Email Sending.</p>
+          <div class="three">${f("mail_from", { type: "email", ph: "fakture@sceassurance.com" })}${f("mail_name", { ph: "SCE Assurance" })}${f("mail_reply", { type: "email", ph: "ako je prazno: e-mail firme", hint: "Na ovu adresu stižu odgovori klijenata." })}</div>
+          <label class="chk"><input type="checkbox" id="is-mail_copy" ${s.mail_copy !== 0 ? "checked" : ""}><span><b>Kopija svakog poslanog e-maila na e-mail firme</b><small>Skrivena kopija (BCC) za vašu arhivu.</small></span></label></div>
         <div class="inline"><button class="btn primary" type="submit">Sačuvaj postavke</button></div>
       </form>`;
-    const read = () => ({ ...Object.fromEntries(Object.keys(I).map(k => [k, ($("#is-" + k) || {}).value || ""])), vat_payer: $("#is-vat_payer").checked });
+    const read = () => ({ ...Object.fromEntries(Object.keys(I).map(k => [k, ($("#is-" + k) || {}).value || ""])), vat_payer: $("#is-vat_payer").checked, mail_copy: $("#is-mail_copy").checked });
     const show = errs => $$("#sf .vf").forEach(l => { const k = l.dataset.k, e = errs[k]; l.classList.toggle("bad", !!e); $("#ie-" + k).textContent = e || ""; });
     $("#sf").addEventListener("focusout", () => show(EVV.checkIssuer(read()).errors));
     $("#sf").addEventListener("submit", async e => {
@@ -709,6 +714,40 @@
     });
     $("#del") && $("#del").addEventListener("click", async () => { if (!confirm("Obrisati nacrt fakture?")) return; await api("/invoices/" + full.id, { method: "DELETE" }); closeDrawer(); invoicesView(); });
   }
+  async function emailDrawer(d, kind) {
+    const e = await api(`/invoices/${d.id}/email`);
+    const reminder = kind === "reminder";
+    openDrawer(`${dhead(reminder ? "Podsjetnik za plaćanje" : "Pošalji fakturu e-mailom", esc(d.number))}
+      ${e.configured ? "" : `<div class="dlbar">${ICON.lock}<div class="grow"><b>Slanje još nije podešeno</b><small>${e.from ? "Domena pošiljaoca mora biti dodana u Cloudflare Email Service." : "Upišite adresu pošiljaoca u Postavkama (Slanje faktura e-mailom)."}</small></div><a class="btn sm" href="#/settings">Postavke</a></div>`}
+      <form class="form" id="emf" novalidate>
+        <label class="f vf" data-k="to"><span class="fl">Prima<b class="req">*</b></span><input id="em-to" value="${esc(e.to.join(", "))}" placeholder="racunovodstvo@klijent.ba" spellcheck="false"><small class="hint">Više adresa odvojite zarezom. Predloženo iz podataka klijenta (e-mail za fakture).</small><small class="ferr" id="e-to"></small></label>
+        <label class="f"><span class="fl">Kopija (CC)</span><input id="em-cc" value="${esc(e.cc.join(", "))}" spellcheck="false"></label>
+        <label class="f"><span class="fl">Naslov</span><input id="em-s" value="${esc(e.subjects[kind])}" maxlength="200"></label>
+        <label class="f"><span class="fl">Lična poruka (neobavezno)</span><textarea id="em-m" placeholder="npr. Hvala na saradnji na projektu ISO 27001."></textarea></label>
+        ${e.portal_users ? `<label class="chk"><input type="checkbox" id="em-p" checked><span><b>Dodaj link na klijentski portal</b><small>${e.portal_users} ${e.portal_users === 1 ? "korisnik" : "korisnika"} ovog klijenta ima pristup portalu.</small></span></label>` : ""}
+        ${d.status === "issued" && !reminder ? `<label class="chk"><input type="checkbox" id="em-sh" checked><span><b>Podijeli fakturu i u portalu</b><small>Faktura postaje vidljiva korisnicima klijenta.</small></span></label>` : ""}
+        <p class="faint small">Pošiljalac: ${esc(e.from_name || "")} &lt;${esc(e.from || "nije podešen")}&gt; · odgovori na ${esc(e.reply_to || "–")}${e.copy_to ? ` · skrivena kopija na ${esc(e.copy_to)}` : ""}. PDF${d.signed_at ? " (kvalifikovano potpisan)" : ""} ide u prilogu.</p>
+        <div class="inline dact"><button class="btn primary" type="submit" ${e.configured ? "" : "disabled"}>${ICON.mail} Pošalji</button><button class="btn" type="button" id="em-pv">Pregled e-maila</button><button class="btn" type="button" data-close>Odustani</button></div>
+      </form><div id="em-prev"></div>`, () => {});
+    $(".dpanel").classList.add("wide");
+    const body = () => ({ kind, to: val("em-to"), cc: val("em-cc"), subject: val("em-s"), message: val("em-m"), portal: !!($("#em-p") && $("#em-p").checked), share: !!($("#em-sh") ? $("#em-sh").checked : true) });
+    const check = () => { const bad = val("em-to").split(/[,;\s]+/).filter(Boolean).filter(x => !EVV.EMAIL.test(x)); const empty = !val("em-to").trim();
+      $("#e-to").textContent = empty ? "Unesite barem jednu adresu." : bad.length ? "Neispravna adresa: " + bad.join(", ") : ""; $('[data-k="to"]').classList.toggle("bad", empty || !!bad.length); return !empty && !bad.length; };
+    $("#em-to").addEventListener("blur", check);
+    $("#em-pv").addEventListener("click", async () => {
+      const r = await fetch(`/api/invoices/${d.id}/email/preview`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body()) });
+      const f = document.createElement("iframe"); f.className = "mailprev"; f.setAttribute("sandbox", ""); f.title = "Pregled e-maila"; f.srcdoc = await r.text();
+      $("#em-prev").innerHTML = ""; $("#em-prev").append(f); f.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    $("#emf").addEventListener("submit", async ev => {
+      ev.preventDefault(); if (!check()) return;
+      const btn = $("#emf button[type=submit]"); btn.disabled = true; btn.textContent = "Šaljem…";
+      try { await api(`/invoices/${d.id}/email`, { method: "POST", body: body(), quiet: true }); toast(reminder ? "Podsjetnik je poslan" : "Faktura je poslana e-mailom"); closeDrawer(); openInvoice(d.id); if (CUR.view === "invoices") invoicesView(); }
+      catch (x) { btn.disabled = false; btn.innerHTML = ICON.mail + " Pošalji";
+        if (x.data && x.data.fields) { $("#e-to").textContent = x.data.fields.to; $('[data-k="to"]').classList.add("bad"); }
+        else toast(x.message === "send_failed" ? "E-mail nije poslan: " + ((x.data && x.data.detail) || "provjerite podešavanje Email Service") : (ERR[x.message] || "Greška: " + x.message)); }
+    });
+  }
   async function sha256File(file) { const b = await crypto.subtle.digest("SHA-256", await file.arrayBuffer()); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join(""); }
   async function openInvoice(id) {
     const d = await api("/invoices/" + id), admin = ME.user.kind === "admin";
@@ -725,8 +764,11 @@
         ${step(!!d.paid_at, "Plaćena", d.paid_at ? fmtDate(d.paid_at) : "")}</ol>
         ${d.status === "cancelled" ? '<p class="tag red">Stornirana</p>' : `<div class="inline" style="flex-wrap:wrap;margin-top:12px">
           ${["issued", "shared", "paid"].includes(d.status) ? `<label class="btn" for="sgf">${ICON.shield} ${d.signed_at ? "Zamijeni potpisani PDF" : "Učitaj potpisani PDF"}</label><input type="file" id="sgf" accept="application/pdf" hidden>` : ""}
-          ${d.status === "issued" ? `<button class="btn accent" id="shr" type="button">Podijeli s klijentom</button>` : ""}
+          <button class="btn accent" id="eml" type="button">${ICON.mail} Pošalji e-mailom</button>
+          ${["issued", "shared"].includes(d.status) && daysTo(d.due_date) < 0 ? `<button class="btn" id="rem" type="button">Pošalji podsjetnik</button>` : ""}
+          ${d.status === "issued" ? `<button class="btn" id="shr" type="button">Podijeli u portalu</button>` : ""}
           ${["issued", "shared"].includes(d.status) ? `<button class="btn" id="pd" type="button">${ICON.check} Označi plaćeno</button><span class="sp"></span><button class="btn ghost danger" id="cn" type="button">Storniraj</button>` : ""}</div>`}
+        <div id="mhist"></div>
         <details class="howsign"><summary>Kako dodati kvalifikovani digitalni potpis?</summary><ol><li>Preuzmite PDF (original bez potpisa).</li><li>Otvorite ga u Adobe Acrobat Readeru ili alatu vašeg certifikacionog tijela i potpišite ga kvalifikovanim certifikatom (kartica, USB token ili udaljeni potpis).</li><li>Sačuvajte potpisani PDF i učitajte ga ovdje. Klijent tada dobija potpisanu verziju.</li></ol><p class="faint small">Evidenta ne čuva vaš privatni ključ; potpis nastaje na vašem uređaju.</p></details></div>` : ""}
       <div class="sec"><h3>${ICON.lock} Provjera autentičnosti</h3><p class="muted small">Odaberite PDF koji imate, a Evidenta provjerava da je identičan izdanoj fakturi (SHA-256). Provjera se radi u vašem pregledniku, datoteka se ne šalje.</p>
         <label class="btn sm" for="vf" style="margin-top:8px">Provjeri PDF</label><input type="file" id="vf" accept="application/pdf" hidden><p id="vres" class="small" style="margin-top:8px"></p>
@@ -737,6 +779,10 @@
     const reload = () => { openInvoice(id); if (CUR.view === "invoices") api("/invoices").then(() => invoicesView()); };
     $("#sgf") && $("#sgf").addEventListener("change", async e => { const f = e.target.files[0]; if (!f) return; const fd = new FormData(); fd.append("file", f);
       try { await api(`/invoices/${id}/signed`, { method: "POST", body: fd }); toast("Potpisani PDF je učitan"); reload(); } catch (x) {} });
+    $("#eml") && $("#eml").addEventListener("click", () => emailDrawer(d, "invoice"));
+    $("#rem") && $("#rem").addEventListener("click", () => emailDrawer(d, "reminder"));
+    if (admin && d.status !== "cancelled") api(`/invoices/${id}/email`).then(e => { const h = $("#mhist"); if (!h || !e.history.length) return;
+      h.innerHTML = `<h4 class="th4">Poslani e-mailovi</h4><div class="list plain">${e.history.map(x => { const r = JSON.parse(x.recipients); return `<div class="li"><span class="grow"><b>${esc(x.kind === "reminder" ? "Podsjetnik" : "Faktura")} → ${esc([...r.to, ...r.cc].join(", "))}</b><small>${fmtDT(x.sent_at)} · ${esc(x.sent_by)}${x.error ? " · " + esc(x.error) : ""}</small></span><span class="tag ${x.status === "sent" ? "teal" : "red"}">${x.status === "sent" ? "poslano" : "greška"}</span></div>`; }).join("")}</div>`; }).catch(() => {});
     $("#shr") && $("#shr").addEventListener("click", async () => { if (!confirm(`Podijeliti fakturu ${d.number} s korisnicima klijenta ${d.client_name}? Vidjet će je u klijentskom portalu.`)) return; await api(`/invoices/${id}/share`, { method: "POST" }); toast("Faktura je podijeljena s klijentom"); reload(); });
     $("#pd") && $("#pd").addEventListener("click", async () => { const dt = prompt("Datum uplate (GGGG-MM-DD):", new Date().toISOString().slice(0, 10)); if (!dt) return; await api(`/invoices/${id}/paid`, { method: "POST", body: { paid_at: dt } }); toast("Označeno kao plaćeno"); reload(); });
     $("#cn") && $("#cn").addEventListener("click", async () => { if (!confirm(`Stornirati fakturu ${d.number}? Broj ostaje zauzet, a faktura se označava kao stornirana.`)) return; await api(`/invoices/${id}/cancel`, { method: "POST" }); toast("Faktura je stornirana"); reload(); });

@@ -94,7 +94,8 @@
     vat_number: { label: "PDV broj" }, court_reg: { label: "Registracija (sud, broj)" }, phone: { label: "Telefon" }, email: { label: "E-mail", required: true }, website: { label: "Web" },
     bank: { label: "Banka", required: true }, iban: { label: "IBAN", required: true }, swift: { label: "SWIFT/BIC" }, place: { label: "Mjesto izdavanja", required: true },
     prefix: { label: "Prefiks broja fakture" }, due_days: { label: "Rok plaćanja (dana)" }, vat_rate: { label: "Stopa PDV-a (%)" }, currency: { label: "Valuta" },
-    signer_name: { label: "Potpisnik (ime i prezime)", required: true }, signer_title: { label: "Funkcija potpisnika" }, footer: { label: "Napomena u podnožju" }
+    signer_name: { label: "Potpisnik (ime i prezime)", required: true }, signer_title: { label: "Funkcija potpisnika" }, footer: { label: "Napomena u podnožju" },
+    mail_from: { label: "Adresa pošiljaoca" }, mail_name: { label: "Ime pošiljaoca" }, mail_reply: { label: "Odgovori na (Reply-To)" }, mail_copy: { label: "Kopija svakog e-maila nama" }
   };
   function checkIssuer(input) {
     const c = checkClient({ ...input, name: input.name, legal_name: input.name }), v = {}, e = {};
@@ -108,6 +109,9 @@
     v.due_days = String(Math.min(120, Math.max(0, parseInt(v.due_days, 10) || 15)));
     v.vat_rate = String(Math.min(50, Math.max(0, parseFloat(String(v.vat_rate).replace(",", ".")) || (v.vat_payer ? 17 : 0))));
     v.currency = ["BAM", "EUR"].includes(v.currency) ? v.currency : "BAM";
+    v.mail_from = v.mail_from.toLowerCase(); v.mail_reply = v.mail_reply.toLowerCase(); v.mail_name = v.mail_name.replace(/[<>"\r\n]/g, "").slice(0, 80);
+    for (const k of ["mail_from", "mail_reply"]) if (v[k] && !EMAIL.test(v[k])) e[k] = "Neispravna e-mail adresa.";
+    v.mail_copy = input.mail_copy === false || input.mail_copy === "0" || input.mail_copy === 0 ? 0 : 1;
     const missing = Object.entries(ISSUER).filter(([k, f]) => f.required && !v[k]).map(([, f]) => f.label);
     return { value: v, errors: e, missing };
   }

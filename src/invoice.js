@@ -10,9 +10,12 @@ import FONT_700 from "./assets/archivo-700.ttf";
 import LOGO from "./assets/shield.png";
 import qrcode from "./qrcode.cjs";
 import "../public/validate.js";
+import { compose, sendInvoiceMail } from "./mailer.js";
 const V = globalThis.EVV;
 
 const MAX_PDF = 15 * 1024 * 1024;
+let logoB64 = null;
+const LOGO_B64 = () => logoB64 || (logoB64 = (() => { const u = new Uint8Array(LOGO); let x = ""; for (const c of u) x += String.fromCharCode(c); return btoa(x); })());
 const STATUSES = ["draft", "issued", "shared", "paid", "cancelled"];
 
 /* ---------- labels ---------- */
@@ -267,7 +270,7 @@ const clip = (v, n) => { const s = String(v == null ? "" : v).replace(/[\u0000-\
 export async function getIssuer(env) {
   const r = await env.DB.prepare("SELECT v FROM app_settings WHERE k='issuer'").first();
   let v = {}; try { v = r ? JSON.parse(r.v) : {}; } catch {}
-  const c = V.checkIssuer({ name: "SCE Assurance", country_code: "BA", prefix: "SCE", due_days: 15, currency: "BAM", place: "Sarajevo", ...v });
+  const c = V.checkIssuer({ name: "SCE Assurance", country_code: "BA", prefix: "SCE", due_days: 15, currency: "BAM", place: "Sarajevo", mail_name: "SCE Assurance", ...v });
   return { ...c.value, missing: c.missing };
 }
 
@@ -468,6 +471,56 @@ export async function invoicesApi(req, env, u, p, url, H) {
     await env.DB.prepare("UPDATE invoices SET status='paid', paid_at=?, updated_at=? WHERE id=?").bind(isDate(b.paid_at) ? b.paid_at : today(), now(), inv.id).run();
     await log(env, u.email, "update", "invoice", inv.id, null, { title: `Faktura ${inv.number} plaćena` });
     return json({ ok: true });
+  }
+  /* e-mail with the PDF attached (Cloudflare Email Service) */
+  if (act === "email" && m === "GET") {
+    const iss = await getIssuer(env), c = await clientRow(env, inv.client_id) || {};
+    const portal = (await env.DB.prepare("SELECT COUNT(*) n FROM users WHERE kind='client' AND client_id=?").bind(inv.client_id).first()).n;
+    const log2 = (await env.DB.prepare("SELECT kind, recipients, subject, status, error, sent_at, sent_by FROM invoice_emails WHERE invoice_id=? ORDER BY sent_at DESC").bind(inv.id).all()).results;
+    const pv = { invoice: compose(inv, iss, { kind: "invoice", portalUrl: portal ? "#" : null }), reminder: compose(inv, iss, { kind: "reminder", portalUrl: portal ? "#" : null }) };
+    return json({ to: [c.invoice_email || c.email].filter(Boolean), cc: [c.contact_email].filter(e => e && e !== (c.invoice_email || c.email)), from: iss.mail_from, from_name: iss.mail_name,
+      reply_to: iss.mail_reply || iss.email, copy_to: iss.mail_copy ? iss.email : null, portal_users: portal, configured: !!(env.EMAIL && iss.mail_from),
+      subjects: { invoice: pv.invoice.subject, reminder: pv.reminder.subject }, history: log2 });
+  }
+  if (act === "email" && p[3] === "preview" && m === "POST") {
+    const b = await body(req), iss = await getIssuer(env);
+    const snapI = inv.issuer_snapshot ? { ...iss, ...JSON.parse(inv.issuer_snapshot) } : iss;
+    const mail = compose(inv, snapI, { kind: b.kind === "reminder" ? "reminder" : "invoice", message: b.message, subject: b.subject, portalUrl: b.portal ? "https://app.evidenta.io/#/invoices/" + inv.id : null, signed: !!inv.signed_key });
+    return new Response(mail.html.replace('src="cid:sce-logo"', 'src="data:image/png;base64,' + LOGO_B64() + '"'), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'" } });
+  }
+  if (act === "email" && m === "POST" && !p[3]) {
+    if (!["issued", "shared", "paid"].includes(inv.status)) return err(400, "not_issued");
+    const b = await body(req), kind = b.kind === "reminder" ? "reminder" : "invoice";
+    if (kind === "reminder" && inv.status === "paid") return err(400, "state");
+    const list = x => [...new Set((Array.isArray(x) ? x : String(x || "").split(/[,;\s]+/)).map(e => String(e).trim().toLowerCase()).filter(Boolean))];
+    const to = list(b.to), cc = list(b.cc);
+    if (!to.length) return json({ error: "invalid", fields: { to: "Unesite barem jednu adresu." } }, 400);
+    const bad = [...to, ...cc].filter(e => !V.EMAIL.test(e));
+    if (bad.length) return json({ error: "invalid", fields: { to: "Neispravna adresa: " + bad.join(", ") } }, 400);
+    if (to.length + cc.length > 10) return json({ error: "invalid", fields: { to: "Najviše 10 primalaca." } }, 400);
+    const iss = await getIssuer(env);
+    if (!iss.mail_from) return err(400, "mail_from_missing");
+    const portal = (await env.DB.prepare("SELECT COUNT(*) n FROM users WHERE kind='client' AND client_id=?").bind(inv.client_id).first()).n;
+    const portalUrl = portal && b.portal !== false ? `https://app.evidenta.io/#/invoices/${inv.id}` : null;
+    const snapI = inv.issuer_snapshot ? { ...iss, ...JSON.parse(inv.issuer_snapshot), mail_from: iss.mail_from, mail_name: iss.mail_name } : iss;
+    const mail = compose(inv, snapI, { kind, message: b.message, subject: b.subject, portalUrl, signed: !!inv.signed_key });
+    const obj = await env.FILES.get(inv.signed_key || inv.pdf_key);
+    if (!obj) return err(404, "file");
+    const pdf = await obj.arrayBuffer();
+    const filename = `${inv.number}${inv.signed_key ? "_potpisano" : ""}.pdf`;
+    const bcc = iss.mail_copy && iss.email && !to.includes(iss.email) && !cc.includes(iss.email) ? [iss.email] : [];
+    const id = uid(), at = now(), rec = JSON.stringify({ to, cc, bcc });
+    try {
+      const r = await sendInvoiceMail(env, { from: iss.mail_from, fromName: iss.mail_name, replyTo: iss.mail_reply || iss.email || undefined, to, cc, bcc, subject: mail.subject, html: mail.html, text: mail.text, pdf, filename });
+      await env.DB.prepare("INSERT INTO invoice_emails (id,invoice_id,kind,recipients,subject,status,message_id,sent_at,sent_by) VALUES (?,?,?,?,?,?,?,?,?)").bind(id, inv.id, kind, rec, mail.subject, "sent", (r && r.messageId) || null, at, u.email).run();
+      if (inv.status === "issued" && b.share !== false) await env.DB.prepare("UPDATE invoices SET status='shared', shared_at=?, shared_by=?, updated_at=? WHERE id=?").bind(at, u.email, at, inv.id).run();
+      await log(env, u.email, "export", "invoice", inv.id, null, { title: `Faktura ${inv.number}: ${kind === "reminder" ? "podsjetnik" : "e-mail"} poslan na ${[...to, ...cc].join(", ")}` });
+      return json({ ok: true, message_id: r && r.messageId });
+    } catch (e) {
+      const code = String(e.code || e.message || "send_failed").slice(0, 120);
+      await env.DB.prepare("INSERT INTO invoice_emails (id,invoice_id,kind,recipients,subject,status,error,sent_at,sent_by) VALUES (?,?,?,?,?,?,?,?,?)").bind(id, inv.id, kind, rec, mail.subject, "failed", String(e.message || code).slice(0, 500), at, u.email).run();
+      return json({ error: code === "email_not_configured" ? code : "send_failed", detail: String(e.message || "").slice(0, 300) }, 502);
+    }
   }
   if (act === "cancel" && m === "POST") {
     if (!["issued", "shared"].includes(inv.status)) return err(400, "state");
